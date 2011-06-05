@@ -36,6 +36,11 @@
 
   <dependencies>
       <dependency>
+          <groupId>jgroups</groupId>
+          <artifactId>jgroups</artifactId>
+          <version>2.9.0.GA</version>
+      </dependency>
+      <dependency>
         <groupId>org.bluemold</groupId>
         <artifactId>concurrent</artifactId>
         <version>0.1</version>
@@ -76,6 +81,7 @@
         <configuration>
           <scalaVersion>${scala.version}</scalaVersion>
         </configuration>
+          <version>2.15.2</version>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -93,6 +99,7 @@
             <classpathContainer>ch.epfl.lamp.sdt.launching.SCALA_CONTAINER</classpathContainer>
           </classpathContainers>
         </configuration>
+          <version>2.8</version>
       </plugin>
     </plugins>
   </build>
@@ -104,6 +111,7 @@
         <configuration>
           <scalaVersion>${scala.version}</scalaVersion>
         </configuration>
+          <version>2.15.2</version>
       </plugin>
     </plugins>
   </reporting>
@@ -111,8 +119,8 @@
     <distributionManagement>
         <downloadUrl>https://github.com/neilessy/bluemold-actor</downloadUrl>
         <repository>
-            <id>local</id>
-            <name>Local Repository</name>
+            <id>repo1</id>
+            <name>Temporary Repository</name>
           <url>file:///repo1</url>
           <layout>default</layout>
         </repository>
