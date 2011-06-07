@@ -3,6 +3,7 @@ package bluemold.cluster
 import bluemold.storage.Store
 import util.Random
 import java.io.Serializable
+import java.lang.IllegalStateException
 
 /**
  * ClusterIdentity<br/>
@@ -48,9 +49,9 @@ object UUID {
       try {
         new ClusterIdentity( idParts(0).toLong, idParts(1).toLong )
       } catch {
-        case _ => null 
+        case _ => throw new IllegalStateException() 
       }
-    } else null
+    } else throw new IllegalStateException()
   }
   def generateClusterIdentity(): ClusterIdentity = {
     val store = Store.getStore( clusterIdentityStore )
