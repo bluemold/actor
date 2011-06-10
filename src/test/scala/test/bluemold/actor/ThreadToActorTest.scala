@@ -1,15 +1,14 @@
-package bluemold
+package test.bluemold.actor
 
-import junit.framework._;
-import Assert._
+import junit.framework._
 import bluemold.actor.Actor
 import bluemold.actor.Actor._
 import java.util.concurrent.CountDownLatch
-;
 
-object ActorTest {
+
+object ThreadToActorTest {
     def suite: Test = {
-        val suite = new TestSuite(classOf[ActorTest]);
+        val suite = new TestSuite(classOf[ThreadToActorTest]);
         suite
     }
 
@@ -21,28 +20,30 @@ object ActorTest {
 /**
  * Unit test for simple App.
  */
-class ActorTest extends TestCase("actor") {
+class ThreadToActorTest extends TestCase("threadToActor") {
 
     /**
      * Rigourous Tests :-)
      */
     def testBasics() {
-      val latch = new CountDownLatch(1) 
       val actor = actorOf( new Actor {
 
-        protected def handleException(t: Throwable) { assertTrue( false ) }
-
         protected def react: PartialFunction[Any, Unit] = {
-          case msg => latch.countDown() 
+          case msg: Int => reply( msg + 1 ) 
+          case msg: String => reply( msg + "!" ) 
+          case msg => reply( msg ) 
         }
 
         protected def init() {}
 
       }).start()
       
-      actor ! "hi"
-      
-      latch.await()
+      ( actor ? "hi" ) { case msg => println( msg ) }
+      ( actor ? 1 ) {
+        case msg => ( actor ? msg ) {
+          case msg => println( msg )
+        }
+      }
     }
     
 

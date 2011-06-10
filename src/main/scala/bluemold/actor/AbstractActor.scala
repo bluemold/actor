@@ -4,7 +4,6 @@ import org.bluemold.unsafe.Unsafe
 import annotation.tailrec
 import java.lang.{Throwable, RuntimeException}
 import java.util.{Timer, TimerTask}
-import bluemold.cluster.UUID
 
 /**
  * AbstractActor<br/>
@@ -75,9 +74,9 @@ abstract class AbstractActor extends ActorLike {
     queueCount = -2
   }
 
-  def stop() { _stop() }
+  def stop()(implicit sender: ActorRef) { _stop() }
 
-  def start(): ActorRef = _start()
+  def start()(implicit sender: ActorRef): ActorRef = _start()
 
   final def !( msg: Any )( implicit sender: ActorRef ) {
     currentStrategy.send( msg, this, sender );
@@ -85,15 +84,16 @@ abstract class AbstractActor extends ActorLike {
   final def ?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = if ( sender.isBlockingOnAsync ) {
       val blockingReplyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-      sender.blockOn( blockingReplyAction )
       blockingReplyAction
     } else new ReplyAction( sender, react, sender.currentReplyChannel ) 
     currentStrategy.send( msg, this, replyAction )
+    if ( sender.isBlockingOnAsync )
+      sender.blockOn( replyAction )
   }
   final def !?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-    sender.blockOn( replyAction )
     currentStrategy.send( msg, this, replyAction )
+    sender.blockOn( replyAction )
   }
   final def !!(msg: Any)(implicit sender: ActorRef): Future[Any] = {
     val future = new AbstractFuture
@@ -135,9 +135,14 @@ abstract class AbstractActor extends ActorLike {
     }
   }
 
-  final def isPreStart = queueCount == -1 
-  final def isActive = queueCount >= 0
-  final def isStopped = queueCount == -2
+  private[actor] final def _isPreStart = queueCount == -1 
+  private[actor] final def _isActive = queueCount >= 0
+  private[actor] final def _isStopped = queueCount == -2
+
+  final def checkStatus()(implicit sender: ActorRef) {}
+  final def isPreStart(implicit sender: ActorRef) = _isPreStart 
+  final def isActive(implicit sender: ActorRef) = _isPreStart
+  final def isStopped(implicit sender: ActorRef) = _isPreStart
 
 
   protected implicit final def getNextStrategy() = currentStrategy.getNextStrategy()
@@ -187,6 +192,8 @@ abstract class AbstractActor extends ActorLike {
       this.asInstanceOf[WithTimeout].getTimeout
     } else 0
   }
+
+  protected def handleException( t: Throwable ) { t.printStackTrace() }
 
   private[actor] final def hasMsg: Boolean = ! mailbox.isEmpty
 
@@ -278,6 +285,7 @@ final class ReplyMsg( _msg: Any, _replyAction: ReplyAction ) {
   def msg = _msg
 }
 class ReplyAction( _actee: ActorRef, _react: PartialFunction[Any, Unit], _acteeReplyChannel: ReplyChannel ) extends ReplyChannel {
+  final def _getActee = _actee
   final def react = _react
   final def replyChannel = _acteeReplyChannel
   def issueReply(msg: Any)(implicit sender: ActorRef) {
@@ -406,17 +414,18 @@ final class AbstractFuture extends FutureWithAddReplyChannel[Any] with ReplyChan
 
   def !( react: PartialFunction[Any, Unit] )(implicit sender: ActorRef) {
     val replyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-    sender.blockOn( replyAction )
     queueHelper( replyAction )
+    sender.blockOn( replyAction )
   }
 
   def ?( react: PartialFunction[Any, Unit] )(implicit sender: ActorRef) {
     val replyAction = if ( sender.isBlockingOnAsync ) {
       val blockingReplyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-      sender.blockOn( blockingReplyAction )
       blockingReplyAction
     } else new ReplyAction( sender, react, sender.currentReplyChannel ) 
     queueHelper( replyAction )
+    if ( sender.isBlockingOnAsync )
+      sender.blockOn( replyAction )
   }
   
   @tailrec
@@ -483,7 +492,7 @@ final class AbstractFuture extends FutureWithAddReplyChannel[Any] with ReplyChan
   }
 }
 
-class ChildFuture[+T,U]( parent: FutureWithAddReplyChannel[U], g: (U) => T ) extends FutureWithAddReplyChannel[T] {
+final class ChildFuture[+T,U]( parent: FutureWithAddReplyChannel[U], g: (U) => T ) extends FutureWithAddReplyChannel[T] {
   def !(react: PartialFunction[T, Unit])(implicit sender: ActorRef) {
     parent.!({ case msg: U => react( g( msg ) ) })
   }

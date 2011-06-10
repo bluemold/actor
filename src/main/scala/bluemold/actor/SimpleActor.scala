@@ -12,8 +12,6 @@ abstract class SimpleActor( implicit strategy: ActorStrategy ) extends AbstractA
   protected implicit final def self: ActorRef = this
 
   protected def currentStrategy: ActorStrategy = strategy
-
-  protected def handleException(t: Throwable) { t.printStackTrace() }
 }
 
 abstract class SimpleSupervisedActor( implicit strategy: ActorStrategy ) extends AbstractSupervisedActor with ActorRef  {

@@ -13,12 +13,10 @@ import org.bluemold.unsafe.Unsafe
  * [Description]
  */
 object FiberStrategyFactory {
-  private val defaultFactory = new FiberStrategyFactory
-  def getDefaultFactory = defaultFactory
   val useDaemon = AtomicBoolean.create( true )
   def setDaemon( choice: Boolean ) { useDaemon.set( choice ) } 
 }
-class FiberStrategyFactory extends ActorStrategyFactory {
+class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFactory {
   import FiberStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
@@ -65,7 +63,7 @@ class FiberStrategyFactory extends ActorStrategyFactory {
       strategy.thread.join()
     } )
   }
-  
+
   def getStrategy: ActorStrategy = {
     if ( threads == null ) {
       synchronized {
@@ -141,7 +139,7 @@ class FiberStrategyFactory extends ActorStrategyFactory {
             // inline of processMsgs( msgs, actor )
             msgs match {
               case (msg,sender) :: tail => {
-                if ( actor.isActive ) {
+                if ( actor._isActive ) {
                   // inline of processMsg( msg, actor, sender)
                   try {
                     actor.sender = sender
@@ -157,24 +155,20 @@ class FiberStrategyFactory extends ActorStrategyFactory {
                       }
                       case msg => actor._behavior( msg )
                     }
-                  } catch {
-                    case t: Throwable => {
-                      actor._handleException( t )
-                    }
-                  } finally {
-                    actor.sender = null
                   }
+                  catch { case t: Throwable => actor._handleException( t ) }
+                  finally { actor.sender = null }
                   // end inline of processMsg( msg, actor, sender)
                   msgs = tail
                 }
               }
-              case Nil => // do nothing
+              case Nil => // never reached
             }
             // end inline of processMsgs( msgs, actor )
           }
 
           // Queuing logic
-          val isActive = actor.isActive
+          val isActive = actor._isActive
           if ( ! isActive || ! actor.hasMsg ) {
             // No more messages in the mailbox, don't re-queue
             actor.decQueueCount()
@@ -242,7 +236,7 @@ class FiberStrategyFactory extends ActorStrategyFactory {
         waiting.countDown()
     }
 
-    def getNextStrategyIndex(): Int = {
+    def nextStrategyIndex(): Int = {
       val nextStrategy = this.nextStrategy
       if ( nextStrategy == index ) {
         affinity += 1
@@ -254,7 +248,9 @@ class FiberStrategyFactory extends ActorStrategyFactory {
       nextStrategy
     }
 
-    def getNextStrategy(): ActorStrategy = { val strategy = threads( getNextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
+    def getCluster: Cluster = cluster
+
+    def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
 
     var defaultTimeout: Long = 60000 // milliseconds
 
@@ -268,7 +264,7 @@ class FiberStrategyFactory extends ActorStrategyFactory {
     def processMsgs( msgs: List[(Any,ReplyChannel)], actor: AbstractActor ) {
       msgs match {
         case (msg,sender) :: tail => {
-          if ( actor.isActive ) {
+          if ( actor._isActive ) {
             processMsg( msg, actor, sender)
             processMsgs( tail, actor )
           }
@@ -292,20 +288,16 @@ class FiberStrategyFactory extends ActorStrategyFactory {
           }
           case msg => actor._behavior( msg )
         }
-      } catch {
-        case t: Throwable => {
-          actor._handleException( t )
-        }
-      } finally {
-        actor.sender = null
       }
+      catch { case t: Throwable => actor._handleException( t ) }
+      finally { actor.sender = null }
     }
 
     def send( msg: Any, actor: AbstractActor, sender: ReplyChannel ) {
       if ( Thread.currentThread() == thread && actor.sender == null && sameThreadDepth <= maxSameThreadDepth && sameThreadWidth <= maxSameThreadWidth ) {
         sameThreadDepth += 1
-        sameThreadWidth += 1
-        if ( actor.isActive ) {
+        if ( actor._isActive ) {
+          sameThreadWidth += 1
           // inline of processMsg( msg, actor, sender )
           try {
             actor.sender = sender
@@ -321,15 +313,11 @@ class FiberStrategyFactory extends ActorStrategyFactory {
               }
               case msg => actor._behavior( msg )
             }
-          } catch {
-            case t: Throwable => {
-              actor._handleException( t )
-            }
-          } finally {
-            actor.sender = null
           }
+          catch { case t: Throwable => actor._handleException( t ) }
+          finally { actor.sender = null }
           // end inline of processMsg( msg, actor, sender )
-        }
+        } // isActive
         sameThreadDepth -=1
       } else {
         actor.pushMsg( msg, sender )
