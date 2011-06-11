@@ -141,14 +141,14 @@ abstract class AbstractActor extends ActorLike {
 
   final def checkStatus()(implicit sender: ActorRef) {}
   final def isPreStart(implicit sender: ActorRef) = _isPreStart 
-  final def isActive(implicit sender: ActorRef) = _isPreStart
-  final def isStopped(implicit sender: ActorRef) = _isPreStart
+  final def isActive(implicit sender: ActorRef) = _isActive
+  final def isStopped(implicit sender: ActorRef) = _isStopped
 
 
   protected implicit final def getNextStrategy() = currentStrategy.getNextStrategy()
 
   // makes react accessible to 
-  private[actor] var behavior: PartialFunction[Any,Unit] = _
+  private[actor] final var behavior: PartialFunction[Any,Unit] = _
   private[actor] final def _behavior( msg: Any ) {
     val behavior = this.behavior
     if ( behavior == null ) {
@@ -170,7 +170,7 @@ abstract class AbstractActor extends ActorLike {
   protected def become ( react: PartialFunction[Any, Unit] ) { this.behavior = react }
 
   // current sender, future, or promise, or maybe thread local
-  var sender: ReplyChannel = null
+  final var sender: ReplyChannel = null
   
   // message box methods, leave implementation to specific type of actor
   private[actor] def doGetParent: ActorRef = null
@@ -228,15 +228,9 @@ abstract class AbstractActor extends ActorLike {
   @tailrec
   private[actor] final def popAllMsg(): List[(Any,ReplyChannel)] = {
     val curMailbox = mailbox
-    curMailbox match {
-      case Nil => Nil
-      case _ => {
-        if ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, Nil ) )
-          popAllMsg()
-        else
-          curMailbox
-      }
-    }
+    if ( curMailbox.isEmpty ) Nil
+    else if ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, Nil ) ) popAllMsg()
+    else curMailbox
   }
 
   @tailrec
