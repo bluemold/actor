@@ -28,9 +28,7 @@ object Cluster {
     if ( defaultCluster == null ) {
       synchronized {
         if ( defaultCluster == null ) {
-          val cluster = new UDPCluster( "bluemold", "default" )
-          cluster.startup()
-          defaultCluster = cluster
+          defaultCluster = UDPCluster.getCluster( "bluemold", "default" )
         }
       }
     }

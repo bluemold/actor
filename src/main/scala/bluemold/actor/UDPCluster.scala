@@ -5,6 +5,7 @@ import java.io.{ObjectInputStream, ByteArrayInputStream, ObjectOutputStream, Byt
 import java.net._
 import java.util.concurrent.ConcurrentHashMap
 import annotation.tailrec
+import bluemold.concurrent.{AtomicInteger, AtomicBoolean}
 
 /**
  * UDPCluster<br/>
@@ -14,20 +15,59 @@ import annotation.tailrec
  * [Description]
  */
 
-private object UDPCluster {
-  val broadcastPort = 9900
-  val minPort = 9901
-  val maxPort = 9999
+case class LocalClusterIdentity( appName: String, groupName: String )
+
+object UDPCluster {
+  private[actor] val broadcastPort = 9900
+  private[actor] val minPort = 9901
+  private[actor] val maxPort = 9999
+
+  val clusters = new ConcurrentHashMap[LocalClusterIdentity,UDPCluster]
+
+  def getCluster( appName: String, groupName: String ) = {
+    val localId = LocalClusterIdentity( appName, groupName )
+    val cluster = clusters.get( localId )
+    if ( cluster == null ) {
+      val cluster = new UDPCluster( localId )
+      val oldCluster = clusters.putIfAbsent( localId, cluster )
+      if ( oldCluster == null ) { cluster.startup(); cluster }
+      else oldCluster
+    } else cluster
+  }
 }
 
 case class UDPAddress( address: InetAddress, port: Int )
 
-final class UDPCluster( appName: String, groupName: String ) extends Cluster {
+final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
   import UDPCluster._
 
-  val sockets = getSockets(  NetworkInterface.getNetworkInterfaces )
+  val done = new AtomicBoolean()
 
-  private def getSockets( interfaces: java.util.Enumeration[NetworkInterface] ): HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)] = {
+  val numSentBuckets = 4
+  val sent = Array.fill( numSentBuckets ) { new ConcurrentHashMap[UUID,ClusterMessage] }
+  val sentIndex = new AtomicInteger()
+  val sentDelay = 10000
+
+  val numReceivedBuckets = 4
+  val received = Array.fill( numSentBuckets ) { new ConcurrentHashMap[UUID,ClusterMessage] }
+  val receivedIndex = new AtomicInteger()
+  val receivedDelay = 60000
+
+
+  @volatile var sockets: HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)] = _
+
+  private def getSockets = {
+    if ( sockets == null ) {
+      synchronized {
+        if ( sockets == null ) {
+          sockets = getSockets0( NetworkInterface.getNetworkInterfaces )
+        }
+      }
+    }
+    sockets
+  }
+
+  private def getSockets0( interfaces: java.util.Enumeration[NetworkInterface] ): HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)] = {
     var map = new HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)]()
     while ( interfaces.hasMoreElements ) {
       val interface = interfaces.nextElement()
@@ -67,8 +107,8 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
     } else null
   }
 
-  def getAppName: String = appName
-  def getGroupName: String = groupName
+  def getAppName: String = localId.appName
+  def getGroupName: String = localId.groupName
 
   val addressToId: ConcurrentHashMap[UDPAddress,ClusterIdentity] = new ConcurrentHashMap[UDPAddress,ClusterIdentity]
   val idToAddresses: ConcurrentHashMap[ClusterIdentity,List[UDPAddress]] = new ConcurrentHashMap[ClusterIdentity, List[UDPAddress]]
@@ -85,6 +125,7 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
     
     if ( target != null ) {
       var socket: DatagramSocket = null
+      val sockets = getSockets
       for ( address <- sockets.keys ) {
         if ( socket == null ) {
           val targetBytes = target.address.getAddress
@@ -117,9 +158,26 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
   } 
 
   def startup() {
+    getSockets
+    val sentCleaner = new Thread( new SentCleaner() )
+    sentCleaner.setDaemon( true )
+    sentCleaner.start()
+    val receivedCleaner = new Thread( new ReceivedCleaner() )
+    receivedCleaner.setDaemon( true )
+    receivedCleaner.start()
   }
 
   def shutdown() {
+    done.set( true )
+    clusters.remove( localId, this )
+    for ( (socket,broadcast,bAddress) <- getSockets.values ) {
+      try {
+        socket.close()
+      } catch { case t: Throwable => t.printStackTrace() }
+      try {
+        broadcast.close()
+      } catch { case t: Throwable => t.printStackTrace() }
+    }
   }
 
   private def send( clusterId: ClusterIdentity, out: ByteArrayOutputStream ) {
@@ -128,19 +186,25 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
         val bytes = out.toByteArray
 //        println( "Send: From: " + socket.getLocalAddress + ":" + socket.getLocalPort + " To: " + udpAddress.address + ":" + udpAddress.port )
         val packet = new DatagramPacket(bytes,bytes.length,udpAddress.address,udpAddress.port)
-        socket.send(packet)
+        try {
+          socket.send(packet)
+        } catch { case t: Throwable => t.printStackTrace() }
       }
       case None => {
         val bytes = out.toByteArray
-        for ( (socket,broadcast,bAddress) <- sockets.values ) {
+        for ( (socket,broadcast,bAddress) <- getSockets.values ) {
 //          println( "MSend: From: " + socket.getLocalAddress + ":" + socket.getLocalPort + " To: " + bAddress + ":" + broadcastPort )
           val packet = new DatagramPacket(bytes,bytes.length,bAddress,broadcastPort)
-          socket.send(packet)
+          try {
+            socket.send(packet)
+          } catch { case t: Throwable => t.printStackTrace() }
         }
       }
     }
   } 
 
+  
+  
   def send( clusterId: ClusterIdentity, message:ClusterMessage ) {
     val out = new ByteArrayOutputStream
     val objectOut = new ObjectOutputStream( out )
@@ -188,11 +252,11 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
     
   }
   
-  class Receiver( socket: DatagramSocket ) extends Runnable {
+  final class Receiver( socket: DatagramSocket ) extends Runnable {
     def run() {
       val buffer = new Array[Byte](16384)
       val packet = new DatagramPacket(buffer,buffer.length)
-      while ( true ) {
+      while ( ! done.get() ) {
         try {
           socket.receive( packet )
           val in = new ByteArrayInputStream( packet.getData, packet.getOffset, packet.getLength )
@@ -263,6 +327,48 @@ final class UDPCluster( appName: String, groupName: String ) extends Cluster {
                   actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
           }
         } catch { case t: Throwable => t.printStackTrace() } // log and try again
+      }
+    }
+  }
+
+  /**
+   * Message sending algorithm:
+   * send message ( connection error may be immediate or not ) and mark successfully send chunks
+   * wait for response, if no response in time report error on interface to cluster listener
+   * then try another interface. If no more interfaces or out of tries then report message failure to cluster listener.
+   * If actor instance of MessageFailureActor then report message as failed.
+   * 
+   * MessageChunk => type + uuid + total chunks + index( start with zero ) + data
+   * MessageSingleton => type + uuid + data
+   * MessageReceiptRequest => type + uuid + total chunks
+   * MessageReceipt => type + uuid + errorCode ( 0=success ) + chunks received ( if reported received != expected received then error )
+   * MessageChunksNeeded => type + uuid + List( id, id, id, id, id ) 
+   * MessageChunkRangesNeeded => type + uuid + List( id - id, id - id, id - id )
+   * 
+   * Receiver triggers MessageReceipt upon receiving all chunks
+   * If sender does not hear back after a set time he sends a recipt request
+   * Receiver replys to a recipt request with a recipt or chunks needed response.
+   * The chunks needed response is sent even when the reciever never heard any of the chunks.
+   * 
+   * If the receiver has not gotten all the chunks by a set time they respond with a chunks needed.
+   * If the receiver does not receive all the chunks by a set time then it is simply forgotten.
+   */
+  final class SentCleaner() extends Runnable {
+    def run() {
+      while ( ! done.get() ) {
+        synchronized { wait( sentDelay ) }
+        val currentBucket = sentIndex.modIncrementAndGet( numSentBuckets )
+        
+      }
+    }
+  }
+
+  final class ReceivedCleaner() extends Runnable {
+    def run() {
+      while ( ! done.get() ) {
+        synchronized { wait( receivedDelay ) }
+        val currentBucket = receivedIndex.modIncrementAndGet( numReceivedBuckets )
+        
       }
     }
   }

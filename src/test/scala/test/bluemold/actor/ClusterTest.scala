@@ -38,16 +38,14 @@ class ClusterTest extends TestCase("cluster") {
   }
   
   def clusterOne(): ActorRef = {
-    implicit val cluster = new UDPCluster( "clusterOne", "default" )
+    implicit val cluster = UDPCluster.getCluster( "clusterOne", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    cluster.startup()
     actorOf( new ClusterActor( "Fred", latchOne ) ).start()
   }
     
   def clusterTwo(): ActorRef = {
-    implicit val cluster = new UDPCluster( "clusterTwo", "default" )
+    implicit val cluster = UDPCluster.getCluster( "clusterTwo", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    cluster.startup()
     actorOf( new ClusterActor( "George", latchTwo) ).start()
   }
 
