@@ -65,16 +65,18 @@ trait Cluster {
 
   val registry = ClusterIdentity.getRegistry( getClusterId )
 
-  val byClassName = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
-  val byId = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
-  val byUUID = new ConcurrentHashMap[UUID,BaseRegisteredActor]
-
   def register( registeredActor: BaseRegisteredActor ) { registry.register( registeredActor ) }
   def unRegister( registeredActor: BaseRegisteredActor ) { registry.unRegister( registeredActor ) }
+
   def getAllByClassName( className: String ) = registry.getAllByClassName( className )
-  def getAll() = registry.getAll()
+  def getAll = registry.getAll
   def getAllById( id: String ) = registry.getAllById( id )
   def getByUUID( uuid: UUID ) = registry.getByUUID( uuid )
+  def getCount: Int = registry.getCount
+  def getIdCount: Int = registry.getIdCount
+  def getClassNameCount: Int = registry.getClassNameCount
+  def getIdTotal: Int = registry.getIdTotal
+  def getClassNameTotal: Int = registry.getClassNameTotal
 }
 
 

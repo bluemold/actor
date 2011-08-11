@@ -281,7 +281,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
                 actor.!(stopped)(new RemoteActorRef(sender,UDPCluster.this)) 
             case ActorClusterMessage( null, msg, senderUUID ) => 
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
-              for ( actor <- getAll() )
+              for ( actor <- getAll )
                 actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
             case ActorClusterMessage( uuid, msg, senderUUID ) => { 
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
@@ -291,7 +291,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
             }
             case ActorClusterAllMessage( null, null, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
-              for ( actor <- getAll() )
+              for ( actor <- getAll )
                 actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
             case ActorClusterAllMessage( null, className, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
@@ -300,7 +300,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
             case ActorClusterAllMessage( clusterId, null, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
               if ( clusterId == getClusterId )
-                for ( actor <- getAll() )
+                for ( actor <- getAll )
                   actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
             case ActorClusterAllMessage( clusterId, className, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
@@ -309,7 +309,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
                   actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
             case ActorClusterMessageById( null, null, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
-              for ( actor <- getAll() )
+              for ( actor <- getAll )
                 actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
             case ActorClusterMessageById( null, id, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
@@ -318,7 +318,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
             case ActorClusterMessageById( clusterId, null, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
               if ( clusterId == getClusterId )
-                for ( actor <- getAll() )
+                for ( actor <- getAll )
                   actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
             case ActorClusterMessageById( clusterId, id, msg, senderUUID ) =>
               updateClusterAddressMap( senderUUID.clusterId, packet.getAddress, packet.getPort )
@@ -358,7 +358,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
       while ( ! done.get() ) {
         synchronized { wait( sentDelay ) }
         val currentBucket = sentIndex.modIncrementAndGet( numSentBuckets )
-        
+        // TODO
       }
     }
   }
@@ -368,7 +368,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
       while ( ! done.get() ) {
         synchronized { wait( receivedDelay ) }
         val currentBucket = receivedIndex.modIncrementAndGet( numReceivedBuckets )
-        
+        // TODO
       }
     }
   }

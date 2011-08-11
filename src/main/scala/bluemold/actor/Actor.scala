@@ -292,8 +292,8 @@ trait Future[+T] {
 }
 
 trait ActorLike {
-  protected implicit def self: ActorRef
-  protected implicit def getNextStrategy(): ActorStrategy
+  protected def self: ActorRef
+  protected def getNextStrategy(): ActorStrategy
   protected def currentStrategy: ActorStrategy
   protected def react: PartialFunction[Any, Unit]
   protected def become( react: PartialFunction[Any, Unit] )
@@ -316,8 +316,8 @@ trait SupervisedActorLike extends ActorLike {
 trait RegisteredActorLike extends SupervisedActorLike {
   protected def getUUID: UUID
   protected def getId: String = "none"
-  private[actor] def _getId: String = getId
-  private[actor] def _getClass = getClass
+  final private[actor] def _getId: String = getId
+  final private[actor] def _getClass = getClass
 }
 
 trait Actor extends ActorLike {
@@ -327,6 +327,8 @@ trait Actor extends ActorLike {
   final protected implicit def self: ActorRef = _self
   final protected implicit def getNextStrategy(): ActorStrategy = _self.doGetNextStrategy()
   final protected def currentStrategy: ActorStrategy = _self.getCurrentStrategy()
+
+  final protected def actorOf( actor: Actor ): ActorRef = Actor.actorOf( actor )( getNextStrategy(), self )
 
   protected def handleException( t: Throwable ) { t.printStackTrace() }
 

@@ -67,8 +67,7 @@ final class JGroupCluster( appName: String, groupName: String ) extends Cluster 
     def receive( p1: Message ) {
       val in = new ByteArrayInputStream( p1.getRawBuffer, p1.getOffset, p1.getLength )
       val objectIn = new ObjectInputStream( in )
-      val msg = objectIn.readObject()
-      msg match {
+      objectIn.readObject() match {
         case msg: IdentityClusterMessage => // do nothing
         case ActorClusterMessage( recipient, msg, sender ) => {
           val localActorRef = getByUUID( recipient )
@@ -78,17 +77,17 @@ final class JGroupCluster( appName: String, groupName: String ) extends Cluster 
         case ActorClusterAllMessage( clusterId, className, msg, sender ) => {
           if ( clusterId == null || getClusterId == clusterId ) {
             if ( className == null )
-              getAll().foreach( ( localActorRef ) => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) )
+              getAll foreach { localActorRef => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) }
             else
-              getAllByClassName( className ).foreach( ( localActorRef ) => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) )
+              getAllByClassName( className ) foreach { localActorRef => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) }
           }
         }
         case ActorClusterMessageById( clusterId, id, msg, sender ) => {
           if ( clusterId == null || getClusterId == clusterId ) {
             if ( id == null )
-              getAll().foreach( ( localActorRef ) => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) )
+              getAll foreach { localActorRef => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) }
             else
-              getAllById( id ).foreach( ( localActorRef ) => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) )
+              getAllById( id ) foreach { localActorRef => localActorRef.!(msg)(new RemoteActorRef(sender,JGroupCluster.this)) }
           }
         }
         case _ => // do nothing

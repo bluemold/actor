@@ -67,6 +67,24 @@ final class ClusterRegistry {
   val byId = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
   val byUUID = new ConcurrentHashMap[UUID,BaseRegisteredActor]
   
+  def getCount: Int = byUUID.size()
+  def getIdCount: Int = byId.size()
+  def getClassNameCount: Int = byClassName.size()
+  def getIdTotal: Int = {
+    var total = 0
+    val elements = byId.elements()
+    while ( elements.hasMoreElements )
+      total += ( elements.nextElement().size() )
+    total
+  }
+  def getClassNameTotal: Int = {
+    var total = 0
+    val elements = byClassName.elements()
+    while ( elements.hasMoreElements )
+      total += ( elements.nextElement().size() )
+    total
+  }
+
   def register( registeredActor: BaseRegisteredActor ) {
     val className = registeredActor._actor._getClass.getName
     val id = registeredActor._getId
@@ -83,7 +101,7 @@ final class ClusterRegistry {
     ( { val map = byId.get( id )
       if ( map == null ) {
         val newMap = new ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]
-        val oldMap = byId.putIfAbsent( className, newMap )
+        val oldMap = byId.putIfAbsent( id, newMap )
         if ( oldMap != null ) oldMap else newMap
       } else map
     } ).put( registeredActor._localRef, registeredActor )
@@ -117,7 +135,7 @@ final class ClusterRegistry {
     }
     ret
   }
-  def getAll(): List[ActorRef] = {
+  def getAll: List[ActorRef] = {
     var ret: List[ActorRef] = Nil
     val iterator = byUUID.values.iterator
     while ( iterator.hasNext )
