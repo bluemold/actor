@@ -1,6 +1,7 @@
 package bluemold.actor
 
 import java.util.concurrent.{TimeUnit, Executors}
+import bluemold.concurrent.AtomicInteger
 
 /**
  * ExecutorStrategyFactory
@@ -18,7 +19,10 @@ class ExecutorStrategyFactory( implicit cluster: Cluster ) extends ActorStrategy
 
   val strategy = new Strategy
 
-  def getStrategy = strategy
+  def getStrategy = {
+    strategy.actorCount.incrementAndGet();
+    strategy
+  }
 
   def shutdownNow() { pool.shutdown() }
 
@@ -27,9 +31,13 @@ class ExecutorStrategyFactory( implicit cluster: Cluster ) extends ActorStrategy
       pool.awaitTermination( 1, TimeUnit.SECONDS )
   }
 
-  def printStats() { println( "No stats available" ) }
+  def printStats() {
+    println( strategy.actorCount.get() )
+  }
 
   class Strategy extends ActorStrategy {
+
+    val actorCount = AtomicInteger.create()
 
     def send( msg: Any, actor: AbstractActor, sender: ReplyChannel ) {
       actor.pushMsg( msg, sender )
@@ -40,7 +48,10 @@ class ExecutorStrategyFactory( implicit cluster: Cluster ) extends ActorStrategy
       pool.execute( new ProcessActorMsgs( actor ) )
     }
 
-    def getNextStrategy() = this
+    def getNextStrategy() = {
+      actorCount.incrementAndGet()
+      this
+    }
 
     var defaultTimeout: Long = 60000 // milliseconds
 

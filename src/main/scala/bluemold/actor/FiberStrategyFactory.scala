@@ -6,7 +6,7 @@ import java.util.concurrent.{TimeUnit, CountDownLatch}
 import org.bluemold.unsafe.Unsafe
 
 /**
- * SimpleStrategy<br/>
+ * FiberStrategyFactory<br/>
  * Author: Neil Essy<br/>
  * Created: 5/20/11<br/>
  * <p/>
@@ -286,7 +286,7 @@ class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFac
               replyAction.react( replyMsg.msg )
             }
           }
-          case msg => actor._behavior( msg )
+          case plainMsg => actor._behavior( plainMsg )
         }
       }
       catch { case t: Throwable => actor._handleException( t ) }

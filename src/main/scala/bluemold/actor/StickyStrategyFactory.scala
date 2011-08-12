@@ -6,7 +6,7 @@ import bluemold.concurrent.{AtomicBoolean, AtomicInteger}
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit, CountDownLatch}
 
 /**
- * SimpleStrategy<br/>
+ * StickyStrategyFactory<br/>
  * Author: Neil Essy<br/>
  * Created: 8/10/11<br/>
  * <p/>
@@ -21,7 +21,6 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
   val maxConsecutiveEmptyLoops = 100
-  val maxSameThreadDepth = 15
   val maxSameThreadWidth = 1000
   val maxAffinity = 15
   val nextStrategy = AtomicInteger.create() 
@@ -93,8 +92,9 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
 
     @volatile var waiting: CountDownLatch = null
     var consecutiveEmptyLoops = 0
-    var sameThreadDepth = 0
     var sameThreadWidth = 0
+    var postponedSends: List[(Any,AbstractActor,ReplyChannel)] = Nil
+
     var nextSteal: Int = 0
 
     @volatile var queue: List[AbstractActor] = Nil
@@ -146,7 +146,6 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
       actors match {
         case actor :: tail => {
           consecutiveEmptyLoops = 0
-          sameThreadDepth = 0
           sameThreadWidth = 0
 
           if ( actor.hasMsg && actor.gainControl( thread ) ) {
@@ -186,7 +185,44 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
               }
 
             } // synchronized
-            actor.releaseControl( thread )
+            if ( ! actor.releaseControl( thread ) )
+              throw new RuntimeException( "What Happened!" )
+          }
+
+          while ( ! postponedSends.isEmpty ) {
+            postponedSends match {
+              case (msg,postActor,sender) :: postponedTail =>
+                postponedSends = postponedTail
+                if ( postActor.gainControl( thread ) ) {
+                  postActor.synchronized {
+                    if ( postActor._isActive ) {
+                      try {
+                        postActor.sender = sender
+                        msg match {
+                          case replyMsg: ReplyMsg => {
+                            val replyAction = replyMsg.replyAction
+                            if ( replyAction.isInstanceOf[BlockingReply] )
+                              postActor._behavior( replyMsg )
+                            else {
+                              postActor.sender = replyAction.replyChannel
+                              replyAction.react( replyMsg.msg )
+                            }
+                          }
+                          case plainMsg => postActor._behavior( plainMsg )
+                        }
+                      }
+                      catch { case t: Throwable => postActor._handleException( t ) }
+                      finally { postActor.sender = null }
+                    }
+                  }
+                  if ( ! postActor.releaseControl( thread ) )
+                    throw new RuntimeException( "What Happened!" )
+                } else {
+                  postActor.pushMsg( msg, sender )
+                  postActor.enqueueIfNeeded()
+                }
+              case Nil => // we are done
+            }
           }
 
           // Queuing logic
@@ -222,6 +258,9 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
         val targetStrategy = threads( nextSteal )
         targetStrategy.stealFromQueue() match {
           case actor: AbstractActor =>
+            consecutiveEmptyLoops = 0
+            sameThreadWidth = 0
+
             if ( actor.hasMsg && actor.gainControl( Thread.currentThread() ) ) {
               actor.synchronized {
                 // process actors messages
@@ -260,6 +299,42 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
 
               } // synchronized
               actor.releaseControl( Thread.currentThread() )
+            }
+
+            while ( ! postponedSends.isEmpty ) {
+              postponedSends match {
+                case (msg,postActor,sender) :: postponedTail =>
+                  postponedSends = postponedTail
+                  if ( postActor.gainControl( thread ) ) {
+                    postActor.synchronized {
+                      if ( postActor._isActive ) {
+                        try {
+                          postActor.sender = sender
+                          msg match {
+                            case replyMsg: ReplyMsg => {
+                              val replyAction = replyMsg.replyAction
+                              if ( replyAction.isInstanceOf[BlockingReply] )
+                                postActor._behavior( replyMsg )
+                              else {
+                                postActor.sender = replyAction.replyChannel
+                                replyAction.react( replyMsg.msg )
+                              }
+                            }
+                            case plainMsg => postActor._behavior( plainMsg )
+                          }
+                        }
+                        catch { case t: Throwable => postActor._handleException( t ) }
+                        finally { postActor.sender = null }
+                      }
+                    }
+                    if ( ! postActor.releaseControl( thread ) )
+                      throw new RuntimeException( "What Happened!" )
+                  } else {
+                    postActor.pushMsg( msg, sender )
+                    postActor.enqueueIfNeeded()
+                  }
+                case Nil => // we are done
+              }
             }
 
             // Queuing logic
@@ -389,41 +464,23 @@ class StickyStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFa
     }
 
     def send( msg: Any, actor: AbstractActor, sender: ReplyChannel ) {
+
       val currentThread = Thread.currentThread()
       val currentStrategy: SimpleStrategy = if ( currentThread == thread ) this else threadMap.get( currentThread )
-      if ( currentStrategy != null && currentStrategy.sameThreadDepth <= maxSameThreadDepth &&
-        currentStrategy.sameThreadWidth <= maxSameThreadWidth && actor.gainControl( currentThread ) ) {
-        currentStrategy.sameThreadDepth += 1
-        if ( actor._isActive ) {
-          currentStrategy.sameThreadWidth += 1
-          actor.synchronized {
-            // inline of processMsg( msg, actor, sender )
-            try {
-              actor.sender = sender
-              msg match {
-                case replyMsg: ReplyMsg => {
-                  val replyAction = replyMsg.replyAction
-                  if ( replyAction.isInstanceOf[BlockingReply] )
-                    actor._behavior( replyMsg )
-                  else {
-                    actor.sender = replyAction.replyChannel
-                    replyAction.react( replyMsg.msg )
-                  }
-                }
-                case plainMsg => actor._behavior( plainMsg )
-              }
-            }
-            catch { case t: Throwable => actor._handleException( t ) }
-            finally { actor.sender = null }
-            // end inline of processMsg( msg, actor, sender )
-          }
-        } // isActive
-        currentStrategy.sameThreadDepth -=1
-        actor.releaseControl( currentThread )
+      if ( currentStrategy != null && currentStrategy.sameThreadWidth <= maxSameThreadWidth ) {
+        if ( currentThread != currentStrategy.thread )
+          throw new RuntimeException( "Not Same Thread!!!" )
+        currentStrategy.sameThreadWidth += 1
+        currentStrategy.postponedSends ::= ((msg,actor,sender))
       } else {
         actor.pushMsg( msg, sender )
         actor.enqueueIfNeeded()
       }
+
+/*
+      actor.pushMsg( msg, sender )
+      actor.enqueueIfNeeded()
+*/
     }
   }
 }
