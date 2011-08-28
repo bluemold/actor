@@ -82,7 +82,7 @@ class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFac
     val done = AtomicBoolean.create()
     val doneOnWait = AtomicBoolean.create()
     val doneOnAllWait = AtomicBoolean.create()
-    val thread = new Thread( this )
+    val thread = new Thread( this, "FiberStrategy-" + index )
     thread.setDaemon( useDaemon.get() )
     thread.setPriority( Thread.NORM_PRIORITY )
     val actorCount = AtomicInteger.create()
