@@ -83,16 +83,19 @@ trait Cluster {
 
 class ClusterAddress extends Serializable
 
-class ClusterMessage extends Serializable
+sealed abstract class ClusterMessage extends Serializable {
+  def destination: ClusterIdentity
+}
 
 class IdentityClusterMessage extends ClusterMessage {
   var identity: ClusterIdentity = null
   var address: ClusterAddress = null
+  def destination = null
 } 
 
-case class ActorClusterMessage( recipient: UUID, msg: Any, sender: UUID ) extends ClusterMessage
-case class ActorClusterAllMessage( clusterId: ClusterIdentity, className: String, msg: Any, sender: UUID ) extends ClusterMessage
-case class ActorClusterMessageById( clusterId: ClusterIdentity, id: String, msg: Any, sender: UUID ) extends ClusterMessage
-case class StopActorClusterMessage( recipient: UUID, sender: UUID ) extends ClusterMessage
-case class StatusRequestClusterMessage( recipient: UUID, sender: UUID ) extends ClusterMessage
-case class StatusResponseClusterMessage( recipient: UUID, sender: UUID, stopped: Boolean ) extends ClusterMessage
+case class ActorClusterMessage( recipient: UUID, msg: Any, sender: UUID ) extends ClusterMessage { def destination = recipient.clusterId }
+case class ActorClusterAllMessage( clusterId: ClusterIdentity, className: String, msg: Any, sender: UUID ) extends ClusterMessage { def destination = null }
+case class ActorClusterMessageById( clusterId: ClusterIdentity, id: String, msg: Any, sender: UUID ) extends ClusterMessage { def destination = null }
+case class StopActorClusterMessage( recipient: UUID, sender: UUID ) extends ClusterMessage { def destination = recipient.clusterId }
+case class StatusRequestClusterMessage( recipient: UUID, sender: UUID ) extends ClusterMessage { def destination = recipient.clusterId }
+case class StatusResponseClusterMessage( recipient: UUID, sender: UUID, stopped: Boolean ) extends ClusterMessage { def destination = recipient.clusterId }

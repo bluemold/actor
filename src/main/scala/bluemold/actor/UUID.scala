@@ -182,7 +182,7 @@ final class ClusterIdentity( _time: Long, _rand: Long ) extends Serializable {
       case _ => false
     }
   }
-  override def hashCode(): Int = time.toInt + rand.toInt
+  override def hashCode(): Int = time.hashCode() + rand.hashCode()
 }
 
 final class UUID( _clusterId: ClusterIdentity, _time: Long, _rand: Long ) extends Serializable {
@@ -197,5 +197,5 @@ final class UUID( _clusterId: ClusterIdentity, _time: Long, _rand: Long ) extend
       case _ => false
     }
   }
-  override def hashCode(): Int = clusterId.hashCode() + time.toInt + rand.toInt
+  override def hashCode(): Int = clusterId.hashCode() + time.hashCode() + rand.hashCode()
 }
