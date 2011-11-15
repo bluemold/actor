@@ -2,17 +2,9 @@ package bluemold.actor
 
 import java.lang.ThreadLocal
 import org.bluemold.unsafe.Unsafe
-import collection.immutable.List._
 import annotation.tailrec
-import java.util.concurrent.{Semaphore, CyclicBarrier}
+import java.util.concurrent.Semaphore
 
-/**
- * Actor<br/>
- * Author: Neil Essy<br/>
- * Created: 5/19/11<br/>
- * <p/>
- * [Description]
- */
 object Actor {
   def actorOf( actor: Actor )( implicit strategy: ActorStrategy, parent: ActorRef ): ActorRef = {
     actor match {
@@ -153,13 +145,13 @@ final class ThreadActorRef extends ActorRef {
   }
 
   @tailrec
-  final def requeue(msgs: List[(Any, ReplyChannel)]) {
+  def requeue(msgs: List[(Any, ReplyChannel)]) {
     val curMailbox = mailbox
     if ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, curMailbox ::: msgs ) )
       requeue( msgs )
   }
 
-  final def requeue(msg: Any, sender: ReplyChannel) {
+  def requeue(msg: Any, sender: ReplyChannel) {
     pushMsg( msg, sender )
     sem.release()
   }
@@ -238,6 +230,8 @@ final class ThreadActorRef extends ActorRef {
 
   def isStopped(implicit sender: ActorRef): Boolean = false
 
+  private[actor] def _onTimeout(delay: Long)(body: => Any)(implicit sender: ActorRef) = null
+
   private[actor] def _requeue(msgs: List[(Any, ReplyChannel)]) {}
 
   private[actor] def _requeue(msg: Any, sender: ReplyChannel) {}
@@ -291,6 +285,10 @@ trait Future[+T] {
   def !( react: PartialFunction[T,Unit] )( implicit sender: ActorRef )
 }
 
+trait CancelableEvent {
+  def cancel(): Boolean
+}
+
 trait ActorLike {
   protected def self: ActorRef
   protected def getNextStrategy(): ActorStrategy
@@ -299,6 +297,7 @@ trait ActorLike {
   protected def become( react: PartialFunction[Any, Unit] )
   protected def requeue( msg: Any, sender: ReplyChannel )
   protected def requeue( msgs: List[(Any, ReplyChannel)] )
+  protected def onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent
 
   protected def handleException( t: Throwable )
   final private[actor] def _handleException( t: Throwable ) { handleException( t ) }
@@ -339,6 +338,8 @@ trait Actor extends ActorLike {
   protected def become( react: PartialFunction[Any, Unit] ) { _self._become( react ) }
   protected def requeue( msg: Any, sender: ReplyChannel ) { _self._requeue( msg, sender ) }
   protected def requeue( msgs: List[(Any, ReplyChannel)] ) { _self._requeue( msgs ) }
+  protected def onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent =
+    _self._onTimeout( delay )( body )( sender )
 }
 object ActorRef {
   implicit def defaultActorRef: ActorRef = getThreadActorRef
@@ -384,8 +385,14 @@ trait ActorRef extends ReplyChannel {
   private[actor] def _become( react: PartialFunction[Any, Unit] )
   private[actor] def _requeue( msg: Any, sender: ReplyChannel )
   private[actor] def _requeue( msgs: List[(Any, ReplyChannel)] )
+  private[actor] def _onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent
 
   private[actor] def _getUUID: UUID
+
+  override def equals(obj: AnyRef) = obj match {
+    case ref: ActorRef => ( this eq ref ) || ( _getUUID != null && _getUUID == ref._getUUID )
+    case _ => false
+  }
 }
 
 trait SupervisedActor extends Actor with SupervisedActorLike {

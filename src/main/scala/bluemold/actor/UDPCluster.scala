@@ -68,9 +68,16 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
   }
 
   private def getSendingMessage( uuid: UUID ) = sent.get( uuid )  
-  private def getReceivingMessage( uuid: UUID ) = received.get( uuid )  
+  private def getReceivingMessage( uuid: UUID ) = received.get( uuid )
 
-  @volatile var sockets: HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)] = _
+
+  def getInterfaces = getSockets.foldLeft(Nil: List[NodeInterface]) { ( list, op ) =>
+    op match {
+      case (iAddress,(interface,socket,bSocket,address)) => interface :: list
+    }
+  }
+
+  @volatile var sockets: HashMap[InterfaceAddress,(UDPNodeInterface,DatagramSocket,DatagramSocket,InetAddress)] = _
 
   private def getSockets = {
     if ( sockets == null ) {
@@ -83,29 +90,34 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
     sockets
   }
 
-  private def getSockets0( interfaces: java.util.Enumeration[NetworkInterface] ): HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)] = {
-    var map = new HashMap[InterfaceAddress,(DatagramSocket,DatagramSocket,InetAddress)]()
+  private def getSockets0( interfaces: java.util.Enumeration[NetworkInterface] ): HashMap[InterfaceAddress,(UDPNodeInterface,DatagramSocket,DatagramSocket,InetAddress)] = {
+    var map = new HashMap[InterfaceAddress,(UDPNodeInterface,DatagramSocket,DatagramSocket,InetAddress)]()
     while ( interfaces.hasMoreElements ) {
       val interface = interfaces.nextElement()
-      if ( ! interface.isLoopback ) {
-        val addresses = interface.getInterfaceAddresses.iterator() 
-        while ( addresses.hasNext ) {
-          val address = addresses.next()
-          val socket = getSocket( minPort, address )
-          if ( socket != null ) {
+      val addresses = interface.getInterfaceAddresses.iterator()
+      while ( addresses.hasNext ) {
+        val address = addresses.next()
+        val socket = getSocket( minPort, address )
+        if ( socket != null ) {
+          val iAddress = address.getAddress
+          val broadcastAddress = address.getBroadcast
+          if ( broadcastAddress != null ) {
             val broadcastSocket = new DatagramSocket( null: SocketAddress )
             broadcastSocket.setReuseAddress( true )
-            broadcastSocket.bind( new InetSocketAddress( address.getAddress, broadcastPort ) )
+            broadcastSocket.bind( new InetSocketAddress( iAddress, broadcastPort ) )
 
-            val broadcastReceiver = new Thread( new Receiver( broadcastSocket ), "UDPCluster-" + getAppName + "-Broadcast-" + address.getAddress + ":" + broadcastPort )
+            val nodeInterface = UDPNodeInterface( interface, iAddress )
+
+            val broadcastReceiver = new Thread( new Receiver( broadcastSocket, nodeInterface ), "UDPCluster-" + getAppName + "-Broadcast-" + iAddress + ":" + broadcastPort )
             broadcastReceiver.setDaemon( true )
             broadcastReceiver.start()
 
-            val socketReceiver = new Thread( new Receiver( socket ), "UDPCluster-" + getAppName + "-Receiver-" + address.getAddress + ":" + socket.getLocalPort )
+            val socketReceiver = new Thread( new Receiver( socket, nodeInterface ), "UDPCluster-" + getAppName + "-Receiver-" + iAddress + ":" + socket.getLocalPort )
             socketReceiver.setDaemon( true )
             socketReceiver.start()
 
-            map += ((address,((socket,broadcastSocket,address.getBroadcast))))
+            println( "addr: " + address.getAddress + "bcast: " + broadcastAddress )
+            map += ((address,((nodeInterface,socket,broadcastSocket,broadcastAddress))))
           }
         }
       }
@@ -168,7 +180,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
           }
           if ( same ) {
             sockets.get(address) match {
-              case Some( ( aSocket, aBroadcast, bAddress ) ) => socket = aSocket
+              case Some( ( interface, aSocket, aBroadcast, bAddress ) ) => socket = aSocket
               case None =>
             }
           }
@@ -200,7 +212,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
   def shutdown() {
     done.set( true )
     clusters.remove( localId, this )
-    for ( (socket,broadcast,bAddress) <- getSockets.values ) {
+    for ( (interface,socket,broadcast,bAddress) <- getSockets.values ) {
       try {
         socket.close()
       } catch { case t: Throwable => t.printStackTrace() }
@@ -210,44 +222,60 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
     }
   }
 
-  private def send( clusterId: ClusterIdentity, out: ByteArrayOutputStream ) {
+  private def send( clusterId: ClusterIdentity, out: ByteArrayOutputStream, sender: LocalActorRef ) {
     val bytes = out.toByteArray
-    val msg = new SendingMessage( bytes, clusterId, sendingChunkSize )
+    val msg = new SendingMessage( bytes, clusterId, sendingChunkSize, sender )
     startSendingMessage( msg )
   } 
 
   
   
-  def send( clusterId: ClusterIdentity, message:ClusterMessage ) {
+  def send( clusterId: ClusterIdentity, message:ClusterMessage, sender: LocalActorRef ) {
     val out = new ByteArrayOutputStream
     val objectOut = new ObjectOutputStream( out )
     objectOut.writeObject( message )
     objectOut.flush()
-    send( clusterId, out )
+    send( clusterId, out, sender )
+  }
+
+  private def send(uuid: UUID, msg: Any, sender: UUID, localActorRef: LocalActorRef ) {
+    send( uuid.clusterId, ActorClusterMessage( uuid, msg, sender ), localActorRef )
   }
 
   def send(uuid: UUID, msg: Any, sender: UUID ) {
-    send( uuid.clusterId, ActorClusterMessage( uuid, msg, sender ) )
+    send( uuid.clusterId, ActorClusterMessage( uuid, msg, sender ), null )
   }
 
   def send(uuid: UUID, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
     if ( localActorRef != null )
-      send( uuid, msg, localActorRef._getUUID )
+      send( uuid, msg, localActorRef._getUUID, localActorRef )
   }
 
   def sendAll(clusterId: ClusterIdentity, className: String, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
     if ( localActorRef != null )
-      send( clusterId, ActorClusterAllMessage( clusterId, className, msg, localActorRef._getUUID ) )
+      send( clusterId, ActorClusterAllMessage( clusterId, className, msg, localActorRef._getUUID ), localActorRef )
   }
 
   def sendAllWithId(clusterId: ClusterIdentity, id: String, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
     if ( localActorRef != null )
-      send( clusterId, ActorClusterMessageById( clusterId, id, msg, localActorRef._getUUID ) )
+      send( clusterId, ActorClusterMessageById( clusterId, id, msg, localActorRef._getUUID ), localActorRef )
   }
   
+  def sendAll(route: List[ClusterIdentity], clusterId: ClusterIdentity, className: String, msg: Any)(implicit sender: ActorRef) {
+    val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
+    if ( localActorRef != null )
+      send( clusterId, ActorClusterAllMessage( clusterId, className, msg, localActorRef._getUUID ), localActorRef )
+  }
+
+  def sendAllWithId(route: List[ClusterIdentity], clusterId: ClusterIdentity, id: String, msg: Any)(implicit sender: ActorRef) {
+    val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
+    if ( localActorRef != null )
+      send( clusterId, ActorClusterMessageById( clusterId, id, msg, localActorRef._getUUID ), localActorRef )
+  }
+
   def updateClusterAddressMap( clusterId: ClusterIdentity, address: InetAddress, port: Int ) {
     updateClusterAddressMap0( clusterId, UDPAddress( address, port ) )
   }
@@ -283,7 +311,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
   
   def getTypeNum( mType: Byte ) = mType % 16
 
-  final class Receiver( socket: DatagramSocket ) extends Runnable {
+  final class Receiver( socket: DatagramSocket, nodeInterface: UDPNodeInterface ) extends Runnable {
     def run() {
       val buffer = new Array[Byte](16384)
       val packet = new DatagramPacket(buffer,buffer.length)
@@ -314,12 +342,12 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
                 getTypeNum( mType ) match {
                   case 1 => // MessageChunk => type(B)(1) + uuid(obj) + destCID + total size(int32) + chunk size(int16) + index( start with zero )(int32) + data(B[])
                     val index = readInt( in )
-                    println( "Chunk:   " + uuid + " : " + index + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
+//                    println( "Chunk:   " + uuid + " : " + index + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
                     val remainder = totalSize - index * chunkSize
                     val dataSize = if ( remainder < chunkSize ) remainder else chunkSize
                     receivingMessage.addChunk( index, data, dataOffset + 59, dataSize ) // offset = 1 + 32 + 16 + 4 + 2 + 4
                     if ( receivingMessage.isComplete ) {
-                      receivingMessage.processMessageOnce( packet.getAddress, packet.getPort )
+                      receivingMessage.processMessageOnce( packet.getAddress, packet.getPort, nodeInterface )
                     }
                   case 2 => // MessageReceiptRequest => type(B)(2) + uuid + total size(int32) + chunk size(int16)
                     if ( destination == getClusterId ) {
@@ -339,10 +367,10 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
               getTypeNum( mType ) match {
                 case 3 => // MessageReceipt => type(B)(3) + uuid + total size(int32) + chunk size(int16) + errorCode ( 0=success, 1=failure )(int16)
                   if ( sendingMessage == null ) {
-                    println( "ReceiptF:" + uuid + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
+//                    println( "ReceiptF:" + uuid + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
                     // todo report error
                   } else {
-                    println( "Receipt: " + uuid + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
+//                    println( "Receipt: " + uuid + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
                     sendingMessage.markReceived()
                   }
                 case 4 => // MessageChunksNeeded => type(B)(4) + uuid + total size(int32) + chunk size(int16) + num ids (int16) + List( id, id, id, id, id )
@@ -373,55 +401,45 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
     }
   }
 
-  def processMessage( clusterMessage: ClusterMessage) {
+  private def sendMessageToLocalActor( base: BaseRegisteredActor, msg: Any, sender: UUID, nodeInterface: UDPNodeInterface ) {
+    base match {
+      case actor: BaseRegisteredActor => actor._actor match {
+        case target: InterfaceRestrictedActor =>
+          if ( target.isInterfaceAllowed( nodeInterface ) )
+            actor._localRef.!(msg)(new RemoteActorRef(sender,UDPCluster.this))
+        case _ => actor._localRef.!(msg)(new RemoteActorRef(sender,UDPCluster.this))
+      }
+      case _ => // ignore
+    }
+  }
+  private def processMessage( clusterMessage: ClusterMessage, nodeInterface: UDPNodeInterface ) {
     clusterMessage match {
+        // Todo: Stop and Status should also respect InterfaceRestrictedActor.
       case StopActorClusterMessage( recipient: UUID, sender: UUID ) =>
         val actor = getByUUID( recipient )
         if ( actor != null )
           actor.stop()
       case StatusRequestClusterMessage( recipient: UUID, sender: UUID ) =>
-        val actor = getByUUID( recipient )
-        if ( actor != null )
-          send( sender.clusterId, StatusResponseClusterMessage( sender, recipient, ! actor.isActive ) )
+        getByUUID( recipient ) match {
+          case actor: LocalActorRef =>
+            send( sender.clusterId, StatusResponseClusterMessage( sender, recipient, ! actor.isActive ), actor )
+          case _ => // ignore
+        }
       case StatusResponseClusterMessage( recipient: UUID, sender: UUID, stopped: Boolean ) =>
-        val actor = getByUUID( recipient )
-        if ( actor != null )
-          actor.!(stopped)(new RemoteActorRef(sender,UDPCluster.this)) 
-      case ActorClusterMessage( null, msg, senderUUID ) => 
-        for ( actor <- getAll )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
-      case ActorClusterMessage( uuid, msg, senderUUID ) =>  
-        val actor = getByUUID( uuid )
-        if ( actor != null )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
-      case ActorClusterAllMessage( null, null, msg, senderUUID ) =>
-        for ( actor <- getAll )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
-      case ActorClusterAllMessage( null, className, msg, senderUUID ) =>
-        for ( actor <- getAllByClassName( className ) )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
-      case ActorClusterAllMessage( clusterId, null, msg, senderUUID ) =>
-        if ( clusterId == getClusterId )
-          for ( actor <- getAll )
-            actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
-      case ActorClusterAllMessage( clusterId, className, msg, senderUUID ) =>
-        if ( clusterId == getClusterId )
-          for ( actor <- getAllByClassName( className ) )
-            actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
-      case ActorClusterMessageById( null, null, msg, senderUUID ) =>
-        for ( actor <- getAll )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
-      case ActorClusterMessageById( null, id, msg, senderUUID ) =>
-        for ( actor <- getAllById( id ) )
-          actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
-      case ActorClusterMessageById( clusterId, null, msg, senderUUID ) =>
-        if ( clusterId == getClusterId )
-          for ( actor <- getAll )
-            actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this)) 
-      case ActorClusterMessageById( clusterId, id, msg, senderUUID ) =>
-        if ( clusterId == getClusterId )
-          for ( actor <- getAllById( id ) )
-            actor.!(msg)(new RemoteActorRef(senderUUID,UDPCluster.this))
+        sendMessageToLocalActor( getBaseByUUID( recipient ), stopped, sender, nodeInterface )
+      case ActorClusterMessage( uuid, msg, sender ) =>
+        if ( uuid == null )
+          for ( actor <- getAllBase )
+            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+        else sendMessageToLocalActor( getBaseByUUID( uuid ), msg, sender, nodeInterface )
+      case ActorClusterAllMessage( clusterId, className, msg, sender ) =>
+        if ( clusterId == null || clusterId == getClusterId )
+          for ( actor <- if ( className == null ) getAllBase else getAllBaseByClassName( className ) )
+            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+      case ActorClusterMessageById( clusterId, id, msg, sender ) =>
+        if ( clusterId == null || clusterId == getClusterId )
+          for ( actor <- if ( id == null ) getAllBase else getAllBaseById( id ) )
+            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
       case _ => throw new RuntimeException( "What Happened!" )
     }
   }
@@ -500,7 +518,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
   case object WaitingForReceipt extends SendingStatus
   case object SuccessfullySent extends SendingStatus
 
-  final class SendingMessage( _bytes: Array[Byte], destination: ClusterIdentity, chunkSize: Short ) {
+  final class SendingMessage( _bytes: Array[Byte], destination: ClusterIdentity, chunkSize: Short, sender: LocalActorRef ) {
     val uuid = new UUID( getClusterId )
     val bytes = _bytes
     val totalSize = bytes.length
@@ -573,7 +591,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
         case Some((udpAddress,socket)) =>
           send( socket, udpAddress.address,udpAddress.port )
         case None =>
-          for ( (socket,broadcast,bAddress) <- getSockets.values )
+          for ( (interface,socket,broadcast,bAddress) <- getSockets.values )
             send( socket,bAddress,broadcastPort )
       }
     }
@@ -583,7 +601,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
         case Some((udpAddress,socket)) =>
           chunks foreach { send( socket, udpAddress.address,udpAddress.port, _ ) }
         case None =>
-          for ( (socket,broadcast,bAddress) <- getSockets.values )
+          for ( (interface,socket,broadcast,bAddress) <- getSockets.values )
             chunks foreach { send( socket,bAddress,broadcastPort, _ ) }
       }
     }
@@ -642,7 +660,7 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
           case Some((udpAddress,socket)) =>
             requestReceipt( socket, udpAddress.address,udpAddress.port )
           case None =>
-            for ( (socket,broadcast,bAddress) <- getSockets.values )
+            for ( (interface,socket,broadcast,bAddress) <- getSockets.values )
               requestReceipt( socket,bAddress,broadcastPort )
         }
       }
@@ -747,36 +765,27 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
       }
     }
     
-    def processMessageOnce( address: InetAddress, port: Int ) = {
+    def processMessageOnce( address: InetAddress, port: Int, nodeInterface: UDPNodeInterface ) = {
       synchronized {
         if ( message == null ) {
+          Cluster.forSerialization.set( UDPCluster.this )
           message = new ObjectInputStream( new ByteArrayInputStream( bytes ) ).readObject() match {
             case message: ClusterMessage => message
             case _ => null
           } 
+          Cluster.forSerialization.set( null )
         }
         if ( message != null && ! messageProcessed ) {
           messageProcessed = true
           if ( destination == null )
-            processMessage( message )
+            processMessage( message, nodeInterface: UDPNodeInterface )
           else if ( destination == getClusterId ) {
-            processMessage( message )
+            processMessage( message, nodeInterface: UDPNodeInterface )
             sendReceiptResponse( address, port )
           }
         }
         message
       }      
-    }
-    def getMessage = {
-      synchronized {
-        if ( message == null ) {
-          message = new ObjectInputStream( new ByteArrayInputStream( bytes ) ).readObject() match {
-            case message: ClusterMessage => message
-            case _ => null
-          } 
-        }
-        message
-      }
     }
     
     def sendReceiptResponse() {
@@ -973,3 +982,5 @@ final class UDPCluster( localId: LocalClusterIdentity ) extends Cluster {
     }
   }
 }
+
+case class UDPNodeInterface( interface: NetworkInterface, address: InetAddress ) extends NodeInterface

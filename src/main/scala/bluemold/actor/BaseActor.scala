@@ -2,6 +2,7 @@ package bluemold.actor
 
 import java.lang.UnsupportedOperationException
 import bluemold.actor.Actor._
+import java.io.ObjectStreamException
 
 /**
  * BaseActor<br/>
@@ -127,7 +128,8 @@ class BaseRegisteredActor( actor: RegisteredActor, parent: ActorRef )( implicit 
   }
 }
 
-final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef {
+@SerialVersionUID(1L)
+final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef with Serializable {
   val uuid = new UUID( baseActor.getCurrentStrategy().getCluster.getClusterId )
   def _getUUID: UUID = uuid
 
@@ -167,6 +169,8 @@ final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef {
 
   private[actor] def doGetChildActors: List[ActorRef] = baseActor.doGetChildActors
 
+  private[actor] def _onTimeout(delay: Long)(body: => Any)(implicit sender: ActorRef) = baseActor._onTimeout( delay )( body )( sender )
+
   private[actor] def _requeue(msgs: List[(Any, ReplyChannel)]) { baseActor._requeue( msgs ) } 
 
   private[actor] def _requeue(msg: Any, sender: ReplyChannel) { baseActor._requeue( msg, sender ) }
@@ -182,17 +186,33 @@ final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef {
   def isActive(implicit sender: ActorRef): Boolean = baseActor.isActive
 
   def isPreStart(implicit sender: ActorRef): Boolean = baseActor.isActive
+
+  @throws(classOf[ObjectStreamException])
+  def writeReplace(): AnyRef = new TransientActorRef( uuid )
 }
 
-final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
+@SerialVersionUID(1L)
+final class TransientActorRef( uuid: UUID ) extends Serializable {
+  @throws(classOf[ObjectStreamException])
+  def readResolve(): AnyRef = {
+    val cluster = Cluster.forSerialization.get()
+    if ( cluster._clusterId == uuid.clusterId )
+      cluster.getByUUID( uuid )
+    else new RemoteActorRef( uuid, cluster )
+  }
+}
+
+@SerialVersionUID(1L)
+final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with Serializable {
 
   def _getUUID = uuid
   def _getCluster = cluster
 
   def stop()(implicit sender: ActorRef) {
-    if ( sender.isInstanceOf[LocalActorRef]) { 
-      cluster.send( uuid.clusterId, StopActorClusterMessage( uuid, sender.asInstanceOf[LocalActorRef]._getUUID ) )
-    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
+    sender match {
+      case localSender: LocalActorRef => cluster.send( uuid.clusterId, StopActorClusterMessage( uuid, localSender._getUUID ), localSender )
+      case _ => throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
+    }
   }
 
   def start()(implicit sender: ActorRef): ActorRef = throw new UnsupportedOperationException()
@@ -211,18 +231,10 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
         cluster.send( uuid, msg )( replyActor )
       }
       case actor: RemoteActorRef => {
-        if ( actor._getCluster == cluster )
-          // let the reply go directly, bypassing this node
-          cluster.send( uuid, msg, actor._getUUID )
-        else {
-          // forward across clusters
-          implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
-          val wrapperActor = actorOf( new WrapperActor( sender ) ).start()
-          cluster.send( uuid, msg )( wrapperActor )
-        }
+        cluster.send( uuid, msg )( actor )
       }
       case actor: LocalActorRef => {
-        cluster.send( uuid, msg, actor._getUUID )
+        cluster.send( uuid, msg )( actor )
       }
       case actor: ActorRef => {
         throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
@@ -272,7 +284,7 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
     if ( sender.isInstanceOf[LocalActorRef] ) {
       val localActorRef = sender.asInstanceOf[LocalActorRef]
       if ( localActorRef.getCurrentStrategy().getCluster == cluster )
-        cluster.send( uuid, msg, localActorRef._getUUID )
+        cluster.send( uuid, msg)( sender )
       else {
         implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
         val wrapperActor = actorOf( new WrapperActor( sender ) ).start()
@@ -307,6 +319,8 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
 
   private[actor] def _requeue(msg: Any, sender: ReplyChannel) { throw new UnsupportedOperationException() }
 
+  private[actor] def _onTimeout(delay: Long)(body: => Any)(implicit sender: ActorRef) = { throw new UnsupportedOperationException() }
+
   private[actor] def _become(react: PartialFunction[Any, Unit]) { throw new UnsupportedOperationException() }
 
   private[actor] def _reply( msg: Any ) { throw new UnsupportedOperationException() }
@@ -320,7 +334,10 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
     lastStatusCheck = System.currentTimeMillis()
     implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
     val statusActor = actorOf( new StatusActor( this ) ).start()
-    cluster.send( uuid.clusterId, StatusRequestClusterMessage( uuid, statusActor.asInstanceOf[LocalActorRef]._getUUID ) )
+    statusActor match {
+      case localStatusActor: LocalActorRef => cluster.send( uuid.clusterId, StatusRequestClusterMessage( uuid, localStatusActor._getUUID ), localStatusActor )
+      case _ => // todo: what do we do here?
+    }
   }
 
   def isStopped( implicit sender: ActorRef ): Boolean = {
@@ -336,6 +353,9 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef {
   }
 
   def isPreStart( implicit sender: ActorRef ): Boolean = false
+
+  @throws(classOf[ObjectStreamException])
+  def writeReplace(): AnyRef = new TransientActorRef( uuid )
 }
 
 final class WrapperActor( actor: ActorRef ) extends RegisteredActor {

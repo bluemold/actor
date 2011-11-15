@@ -2,16 +2,8 @@ package bluemold.actor
 
 import org.bluemold.unsafe.Unsafe
 import annotation.tailrec
-import java.lang.{Throwable, RuntimeException}
 import java.util.{Timer, TimerTask}
-
-/**
- * AbstractActor<br/>
- * Author: Neil Essy<br/>
- * Created: 5/17/11<br/>
- * <p/>
- * [Description]
- */
+import java.lang.{RuntimeException, Throwable}
 
 private[actor] object AbstractActor {
   import org.bluemold.unsafe.Unsafe._
@@ -244,11 +236,21 @@ abstract class AbstractActor extends ActorLike {
     pushMsg( msg, sender )
   }
 
+  protected final def onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent = {
+    if ( sender == self ) {
+      if ( ! sender.isBlockingOnAsync ) {
+        val react: PartialFunction[Any, Unit] = { case _ => body }
+        new DelayedActorReply( delay, Nil, new ReplyAction( sender, react, sender.currentReplyChannel ), sender )
+      } else throw new RuntimeException( "On timeout is for non-blocking actors only" )
+    } else throw new RuntimeException( "Only the actor can call a timeout on itself" )
+  }
+
   private[actor] def _reply( msg: Any ) { reply( msg ) }
   private[actor] def _become( react: PartialFunction[Any, Unit] ) { become( react ) }
   private[actor] def _requeue( msg: Any, sender: ReplyChannel ) { requeue( msg, sender ) }
   private[actor] def _requeue( msgs: List[(Any, ReplyChannel)] ) { requeue( msgs ) }
-
+  private[actor] def _onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent =
+    onTimeout( delay )( body )( sender )
 }
 
 abstract class AbstractSupervisedActor extends AbstractActor with SupervisedActorLike {
@@ -271,6 +273,18 @@ abstract class AbstractSupervisedActor extends AbstractActor with SupervisedActo
   override private[actor] def doLink( actor: ActorRef ) { link( actor ) }
   override private[actor] def doUnlink( actor: ActorRef ) { unlink( actor ) }
   override private[actor] def doGetChildActors: List[ActorRef] = getChildActors
+}
+
+final class DelayedActorReply( delay: Long, msg: Any, replyChannel: ReplyChannel, sender: ActorRef ) extends TimerTask with CancelableEvent {
+  import AbstractActor._
+
+  if ( delay > 0 )
+    timer.schedule( this, delay )
+  else run()
+
+  def run() {
+    replyChannel.issueReply( msg )( sender )
+  }
 }
 
 trait BlockingReply
