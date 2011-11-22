@@ -1,7 +1,7 @@
 package bluemold.actor
 
-import java.util.concurrent.{TimeUnit, Executors}
-import bluemold.concurrent.AtomicInteger
+import java.util.concurrent.{ThreadFactory, TimeUnit, Executors}
+import bluemold.concurrent.{AtomicBoolean, AtomicInteger}
 
 /**
  * ExecutorStrategyFactory
@@ -10,12 +10,26 @@ import bluemold.concurrent.AtomicInteger
  * <p/>
  * [Description]
  */
-
-class ExecutorStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFactory {
+object ExecutorStrategyFactory {
+  val useDaemon = AtomicBoolean.create( true )
+  def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
+}
+class ExecutorStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
+  import ExecutorStrategyFactory._
 
   val concurrency = Runtime.getRuntime.availableProcessors()
 
-  val pool = Executors.newFixedThreadPool( concurrency )
+  val threadFactory = new ThreadFactory {
+    def newThread( r: Runnable ) = {
+      val thread = new Thread( r )
+      thread.setContextClassLoader( sfClassLoader.classLoader )
+      thread.setDaemon( useDaemon.get() )
+      thread.setPriority( Thread.NORM_PRIORITY )
+      thread
+    }
+  }
+
+  val pool = Executors.newFixedThreadPool( concurrency, threadFactory )
 
   val strategy = new Strategy
 

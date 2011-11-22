@@ -14,9 +14,9 @@ import org.bluemold.unsafe.Unsafe
  */
 object FiberStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
-  def setDaemon( choice: Boolean ) { useDaemon.set( choice ) } 
+  def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
 }
-class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFactory {
+class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import FiberStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
@@ -83,6 +83,7 @@ class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFac
     val doneOnWait = AtomicBoolean.create()
     val doneOnAllWait = AtomicBoolean.create()
     val thread = new Thread( this, "FiberStrategy-" + index )
+    thread.setContextClassLoader( sfClassLoader.classLoader )
     thread.setDaemon( useDaemon.get() )
     thread.setPriority( Thread.NORM_PRIORITY )
     val actorCount = AtomicInteger.create()

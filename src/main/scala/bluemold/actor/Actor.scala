@@ -67,6 +67,14 @@ object ActorStrategyFactory {
   }
   
 }
+
+object StrategyFactoryClassLoader {
+  implicit def wrap( classLoader: ClassLoader ) = StrategyFactoryClassLoader( classLoader )
+  implicit def getStrategyFactoryClassLoader = StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
+}
+
+case class StrategyFactoryClassLoader( classLoader: ClassLoader )
+
 trait ActorStrategyFactory {
   def getStrategy: ActorStrategy
   def shutdownNow()
