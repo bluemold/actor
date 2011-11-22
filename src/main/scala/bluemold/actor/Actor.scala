@@ -41,6 +41,14 @@ object Actor {
   def defaultFactory = ActorStrategyFactory.defaultStrategyFactory
   def defaultStrategy = defaultFactory.getStrategy
 }
+
+object StrategyFactoryClassLoader {
+  implicit def wrap( classLoader: ClassLoader ) = new StrategyFactoryClassLoader( classLoader )
+  implicit def getStrategyFactoryClassLoader = new StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
+}
+
+class StrategyFactoryClassLoader( val classLoader: ClassLoader )
+
 object ActorStrategyFactory {
 
   @volatile private var _defaultStrategyFactory: ActorStrategyFactory = null
@@ -67,13 +75,6 @@ object ActorStrategyFactory {
   }
   
 }
-
-object StrategyFactoryClassLoader {
-  implicit def wrap( classLoader: ClassLoader ) = StrategyFactoryClassLoader( classLoader )
-  implicit def getStrategyFactoryClassLoader = StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
-}
-
-case class StrategyFactoryClassLoader( classLoader: ClassLoader )
 
 trait ActorStrategyFactory {
   def getStrategy: ActorStrategy
@@ -397,7 +398,7 @@ trait ActorRef extends ReplyChannel {
 
   private[actor] def _getUUID: UUID
 
-  override def equals(obj: AnyRef) = obj match {
+  override def equals(obj: Any) = obj match {
     case ref: ActorRef => ( this eq ref ) || ( _getUUID != null && _getUUID == ref._getUUID )
     case _ => false
   }
