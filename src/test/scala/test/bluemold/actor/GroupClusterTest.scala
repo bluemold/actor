@@ -71,7 +71,7 @@ class GroupClusterTest extends TestCase("cluster") {
     val myReact: PartialFunction[Any, Unit] = {
       case "announce" => {
         println( getCluster )
-        getCluster.sendAll( classOf[GroupClusterActor].getName, name )
+        getCluster.sendAll( classOf[GroupClusterActor], name )
       }
       case msg: String => {
         if ( msg != name ) {

@@ -59,7 +59,7 @@ class ClusterTest extends TestCase("cluster") {
     protected def react: PartialFunction[Any, Unit] = {
       case "announce" => {
         println( getCluster )
-        getCluster.sendAll( classOf[ClusterActor].getName, name )
+        getCluster.sendAll( classOf[ClusterActor], name )
       }
       case msg: String => {
         if ( msg != name ) {

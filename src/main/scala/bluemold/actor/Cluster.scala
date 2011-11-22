@@ -54,11 +54,15 @@ trait Cluster {
 
   def sendAllWithId( clusterId: ClusterIdentity, id: String, msg: Any )( implicit sender: ActorRef )
 
-  def sendAll( msg: Any )(implicit sender: ActorRef) { sendAll( null, null, msg ) }
+  def sendAll( clusterId: ClusterIdentity, cl: Class[_], msg: Any )( implicit sender: ActorRef ) { sendAll( clusterId, cl.getName, msg )}
+
+  def sendAll( msg: Any )(implicit sender: ActorRef) { sendAll( null, null: String, msg ) }
+
+  def sendAll( cl: Class[_], msg: Any)(implicit sender: ActorRef) { sendAll( null, cl.getName, msg ) }
 
   def sendAll(className: String, msg: Any)(implicit sender: ActorRef) { sendAll( null, className, msg ) }
 
-  def sendAll(clusterId: ClusterIdentity, msg: Any)(implicit sender: ActorRef) { sendAll( clusterId, null, msg ) }
+  def sendAll(clusterId: ClusterIdentity, msg: Any)(implicit sender: ActorRef) { sendAll( clusterId, null: String, msg ) }
 
   def sendAllWithId(id: String, msg: Any)(implicit sender: ActorRef) { sendAllWithId( null, id, msg ) }
 
