@@ -7,7 +7,7 @@ import java.lang.IllegalStateException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * ClusterIdentity<br/>
+ * NodeIdentity<br/>
  * Author: Neil Essy<br/>
  * Created: 5/30/11<br/>
  * <p/>
@@ -16,20 +16,20 @@ import java.util.concurrent.ConcurrentHashMap
 
 object UUID {
   val separator = "-"
-  val clusterIdentityStore = "clusterIdentity"
-  val clusterIdentityKey = "identity"
+  val nodeIdentityStore = "nodeIdentity"
+  val nodeIdentityKey = "identity"
   
-  def getClusterIdentity( appName: String ): ClusterIdentity = {
-    val store = Store.getStore( clusterIdentityStore + "_" + appName )
-    store.get( clusterIdentityKey ) match {
+  def getNodeIdentity( appName: String ): NodeIdentity = {
+    val store = Store.getStore( nodeIdentityStore + "_" + appName )
+    store.get( nodeIdentityKey ) match {
       case Some( id ) => {
         try {
-          parseClusterIdentity( id )
+          parseNodeIdentity( id )
         } catch {
-          case _ => generateClusterIdentity()
+          case _ => generateNodeIdentity()
         }
       }
-      case None => generateClusterIdentity()
+      case None => generateNodeIdentity()
     }
   }
   
@@ -37,32 +37,32 @@ object UUID {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 4 ) {
       try {
-        new UUID( new ClusterIdentity( idParts(0).toLong, idParts(1).toLong ), idParts(2).toLong, idParts(3).toLong )
+        new UUID( new NodeIdentity( idParts(0).toLong, idParts(1).toLong ), idParts(2).toLong, idParts(3).toLong )
       } catch {
         case _ => null 
       }
     } else null
   }
-  def parseClusterIdentity( identity: String ): ClusterIdentity = {
+  def parseNodeIdentity( identity: String ): NodeIdentity = {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 2 ) {
       try {
-        new ClusterIdentity( idParts(0).toLong, idParts(1).toLong )
+        new NodeIdentity( idParts(0).toLong, idParts(1).toLong )
       } catch {
         case _ => throw new IllegalStateException() 
       }
     } else throw new IllegalStateException()
   }
-  def generateClusterIdentity(): ClusterIdentity = {
-    val store = Store.getStore( clusterIdentityStore )
-    val clusterId = new ClusterIdentity( System.currentTimeMillis(), Random.nextLong() )
-    store.put( clusterIdentityKey, clusterId.toString )
+  def generateNodeIdentity(): NodeIdentity = {
+    val store = Store.getStore( nodeIdentityStore )
+    val nodeId = new NodeIdentity( System.currentTimeMillis(), Random.nextLong() )
+    store.put( nodeIdentityKey, nodeId.toString )
     store.flush()
-    clusterId
+    nodeId
   }
 }
 
-final class ClusterRegistry {
+final class NodeRegistry {
   val byClassName = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
   val byId = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
   val byUUID = new ConcurrentHashMap[UUID,BaseRegisteredActor]
@@ -189,40 +189,40 @@ final class ClusterRegistry {
   def getBaseByUUID( uuid: UUID ): BaseRegisteredActor = byUUID.get( uuid )
 }
 
-object ClusterIdentity {
-  val registryMap = new ConcurrentHashMap[ClusterIdentity,ClusterRegistry]()
-  def getRegistry( clusterId: ClusterIdentity ): ClusterRegistry = {
-    val registry = registryMap.get( clusterId )
+object NodeIdentity {
+  val registryMap = new ConcurrentHashMap[NodeIdentity,NodeRegistry]()
+  def getRegistry( nodeId: NodeIdentity ): NodeRegistry = {
+    val registry = registryMap.get( nodeId )
     if ( registry == null ) {
-      val newRegistry = new ClusterRegistry
-      val oldRegistry = registryMap.put( clusterId, newRegistry )
+      val newRegistry = new NodeRegistry
+      val oldRegistry = registryMap.put( nodeId, newRegistry )
       if ( oldRegistry != null ) oldRegistry else newRegistry
     } else registry
   }
 }
-final class ClusterIdentity( _time: Long, _rand: Long ) extends Serializable {
+final class NodeIdentity( _time: Long, _rand: Long ) extends Serializable {
   def time = _time
   def rand = _rand
   override def toString: String = _time.toHexString + UUID.separator + _rand.toHexString
 
   override def equals( obj: Any ): Boolean = {
     obj match {
-      case cid: ClusterIdentity => cid.time == time && cid.rand == rand
+      case cid: NodeIdentity => cid.time == time && cid.rand == rand
       case _ => false
     }
   }
   override def hashCode(): Int = time.hashCode() + rand.hashCode()
 }
 
-final class UUID( _clusterId: ClusterIdentity, _time: Long, _rand: Long ) extends Serializable {
-  def this( _clusterId: ClusterIdentity ) = this( _clusterId, System.currentTimeMillis(), Random.nextLong() )
-  def clusterId = _clusterId
+final class UUID( _nodeId: NodeIdentity, _time: Long, _rand: Long ) extends Serializable {
+  def this( _nodeId: NodeIdentity ) = this( _nodeId, System.currentTimeMillis(), Random.nextLong() )
+  def nodeId = _nodeId
   def time = _time
   def rand = _rand
-  override def toString: String = _clusterId.toString + UUID.separator + _time.toHexString + UUID.separator + _rand.toHexString
+  override def toString: String = _nodeId.toString + UUID.separator + _time.toHexString + UUID.separator + _rand.toHexString
   override def equals( obj: Any ): Boolean = obj match {
-    case uuid: UUID => uuid.clusterId == clusterId && uuid.time == time && uuid.rand == rand
+    case uuid: UUID => uuid.nodeId == nodeId && uuid.time == time && uuid.rand == rand
     case _ => false
   }
-  override def hashCode(): Int = clusterId.hashCode() + time.hashCode() + rand.hashCode()
+  override def hashCode(): Int = nodeId.hashCode() + time.hashCode() + rand.hashCode()
 }

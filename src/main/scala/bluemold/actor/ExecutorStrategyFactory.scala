@@ -14,7 +14,7 @@ object ExecutorStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
   def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
 }
-class ExecutorStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
+class ExecutorStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import ExecutorStrategyFactory._
 
   val concurrency = Runtime.getRuntime.availableProcessors()
@@ -73,7 +73,7 @@ class ExecutorStrategyFactory( implicit cluster: Cluster, sfClassLoader: Strateg
 
     def getDefaultTimeout(): Long = defaultTimeout
 
-    def getCluster = cluster
+    def getNode = node
 
     class ProcessActorMsgs( actor: AbstractActor ) extends Runnable {
       def run() {

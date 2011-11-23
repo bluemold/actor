@@ -16,7 +16,7 @@ object FiberStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
   def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
 }
-class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
+class FiberStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import FiberStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
@@ -249,7 +249,7 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
       nextStrategy
     }
 
-    def getCluster: Cluster = cluster
+    def getNode: Node = node
 
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
 

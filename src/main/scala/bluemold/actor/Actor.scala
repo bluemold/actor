@@ -95,7 +95,7 @@ trait ActorStrategy {
   def getNextStrategy(): ActorStrategy
   def getDefaultTimeout(): Long
   def setDefaultTimeout( newDefault: Long )
-  def getCluster: Cluster
+  def getNode: Node
 }
 
 // TODO: Model ThreadActorRef so threads can interact with actors in a natural way
@@ -311,7 +311,7 @@ trait ActorLike {
   protected def handleException( t: Throwable )
   final private[actor] def _handleException( t: Throwable ) { handleException( t ) }
 
-  final protected def getCluster: Cluster = currentStrategy.getCluster
+  final protected def getNode: Node = currentStrategy.getNode
 }
 
 trait SupervisedActorLike extends ActorLike {

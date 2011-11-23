@@ -91,12 +91,12 @@ class BaseRegisteredActor( actor: RegisteredActor, parent: ActorRef )( implicit 
   protected def react: PartialFunction[Any, Unit] = actor._react
 
   override def start()( implicit sender: ActorRef ): ActorRef = {
-    strategy.getCluster.register( this );
+    strategy.getNode.register( this );
     _start()
   }
 
   override def stop()( implicit sender: ActorRef ) {
-    strategy.getCluster.unRegister( this );
+    strategy.getNode.unRegister( this );
     _stop()
   }
 
@@ -130,7 +130,7 @@ class BaseRegisteredActor( actor: RegisteredActor, parent: ActorRef )( implicit 
 
 @SerialVersionUID(1L)
 final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef with Serializable {
-  val uuid = new UUID( baseActor.getCurrentStrategy().getCluster.getClusterId )
+  val uuid = new UUID( baseActor.getCurrentStrategy().getNode.getNodeId )
   def _getUUID: UUID = uuid
 
   def stop()(implicit sender: ActorRef) { baseActor.stop() }
@@ -195,23 +195,23 @@ final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef wit
 final class TransientActorRef( uuid: UUID ) extends Serializable {
   @throws(classOf[ObjectStreamException])
   def readResolve(): AnyRef = {
-    val cluster = Cluster.forSerialization.get()
-    if ( cluster._clusterId == uuid.clusterId )
-      cluster.getByUUID( uuid )
-    else new RemoteActorRef( uuid, cluster )
+    val node = Node.forSerialization.get()
+    if ( node._nodeId == uuid.nodeId )
+      node.getByUUID( uuid )
+    else new RemoteActorRef( uuid, node )
   }
 }
 
 @SerialVersionUID(1L)
-final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with Serializable {
+final class RemoteActorRef( uuid: UUID, node: Node ) extends ActorRef with Serializable {
 
   def _getUUID = uuid
-  def _getCluster = cluster
+  def _getNode = node
 
   def stop()(implicit sender: ActorRef) {
     sender match {
-      case localSender: LocalActorRef => cluster.send( uuid.clusterId, StopActorClusterMessage( uuid, localSender._getUUID ), localSender )
-      case _ => throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
+      case localSender: LocalActorRef => node.send( uuid.nodeId, StopActorNodeMessage( uuid, localSender._getUUID ), localSender )
+      case _ => throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network")
     }
   }
 
@@ -220,77 +220,77 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with
   def forward(msg: Any)(implicit sender: ActorRef) {
     sender.currentReplyChannel match {
       case future: AbstractFuture => {
-        implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+        implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
         val futureActor = actorOf( new FutureActor( future ) ).start()
-        cluster.send( uuid, msg )( futureActor )
+        node.send( uuid, msg )( futureActor )
       }
       case replyAction: ReplyAction => {
         val actee = replyAction._getActee
-        val wrapperStrategy = new WrapperActorStrategy( actee.getCurrentStrategy(), cluster )
+        val wrapperStrategy = new WrapperActorStrategy( actee.getCurrentStrategy(), node )
         val replyActor = actorOf( new ReplyActor( replyAction ) )(wrapperStrategy,actee).start()
-        cluster.send( uuid, msg )( replyActor )
+        node.send( uuid, msg )( replyActor )
       }
       case actor: RemoteActorRef => {
-        cluster.send( uuid, msg )( actor )
+        node.send( uuid, msg )( actor )
       }
       case actor: LocalActorRef => {
-        cluster.send( uuid, msg )( actor )
+        node.send( uuid, msg )( actor )
       }
       case actor: ActorRef => {
-        throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
+        throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network")
       }
     }
   }
 
   def !!(msg: Any)(implicit sender: ActorRef): Future[Any] = {
-    // even though this is technically feasible, we don't want non-registered actors initiating cluster messages
+    // even though this is technically feasible, we don't want non-registered actors initiating network messages
     if ( sender.isInstanceOf[LocalActorRef]) { 
       val future = new AbstractFuture
       future.setExpiration( sender.getTimeout() )
-      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
       val futureActor = actorOf( new FutureActor( future ) ).start()
-      cluster.send( uuid, msg )( futureActor )
+      node.send( uuid, msg )( futureActor )
       future
-    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster" )
+    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network" )
   }
 
   def !?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
-    // even though this is technically feasible, we don't want non-registered actors initiating cluster messages
+    // even though this is technically feasible, we don't want non-registered actors initiating network messages
     if ( sender.isInstanceOf[LocalActorRef]) { 
       val replyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
       sender.blockOn( replyAction )
-      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
       val replyActor = actorOf( new ReplyActor( replyAction ) ).start()
-      cluster.send( uuid, msg )( replyActor )
-    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster" )
+      node.send( uuid, msg )( replyActor )
+    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network" )
   }
 
   def ?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
-    // even though this is technically feasible, we don't want non-registered actors initiating cluster messages
+    // even though this is technically feasible, we don't want non-registered actors initiating network messages
     if ( sender.isInstanceOf[LocalActorRef]) { 
       val replyAction = if ( sender.isBlockingOnAsync ) {
         val blockingReplyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
         sender.blockOn( blockingReplyAction )
         blockingReplyAction
       } else new ReplyAction( sender, react, sender.currentReplyChannel ) 
-      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+      implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
       val replyActor = actorOf( new ReplyActor( replyAction ) ).start()
-      cluster.send( uuid, msg )( replyActor )
-    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster" )
+      node.send( uuid, msg )( replyActor )
+    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network" )
   }
 
   def !(msg: Any)(implicit sender: ActorRef) {
-    // even though this is technically feasible, we don't want non-registered actors initiating cluster messages
+    // even though this is technically feasible, we don't want non-registered actors initiating network messages
     if ( sender.isInstanceOf[LocalActorRef] ) {
       val localActorRef = sender.asInstanceOf[LocalActorRef]
-      if ( localActorRef.getCurrentStrategy().getCluster == cluster )
-        cluster.send( uuid, msg)( sender )
+      if ( localActorRef.getCurrentStrategy().getNode == node )
+        node.send( uuid, msg)( sender )
       else {
-        implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+        implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
         val wrapperActor = actorOf( new WrapperActor( sender ) ).start()
-        cluster.send( uuid, msg )( wrapperActor )
+        node.send( uuid, msg )( wrapperActor )
       }
-    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a cluster")
+    } else throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network")
   }
 
   def issueReply(msg: Any)(implicit sender: ActorRef) { this.!(msg) }
@@ -332,10 +332,10 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with
   
   def checkStatus()( implicit sender: ActorRef ) {
     lastStatusCheck = System.currentTimeMillis()
-    implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
+    implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
     val statusActor = actorOf( new StatusActor( this ) ).start()
     statusActor match {
-      case localStatusActor: LocalActorRef => cluster.send( uuid.clusterId, StatusRequestClusterMessage( uuid, localStatusActor._getUUID ), localStatusActor )
+      case localStatusActor: LocalActorRef => node.send( uuid.nodeId, StatusRequestNodeMessage( uuid, localStatusActor._getUUID ), localStatusActor )
       case _ => // todo: what do we do here?
     }
   }
@@ -406,8 +406,8 @@ final class StatusActor( actor: RemoteActorRef ) extends RegisteredActor {
   }
 }
 
-final class WrapperActorStrategy( strategy: ActorStrategy, cluster: Cluster ) extends ActorStrategy {
-  def getCluster: Cluster = cluster
+final class WrapperActorStrategy( strategy: ActorStrategy, node: Node ) extends ActorStrategy {
+  def getNode: Node = node
 
   def setDefaultTimeout(newDefault: Long) { strategy.setDefaultTimeout(newDefault) }
 

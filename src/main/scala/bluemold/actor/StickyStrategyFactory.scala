@@ -16,7 +16,7 @@ object StickyStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
   def setDaemon( choice: Boolean ) { useDaemon.set( choice ) } 
 }
-class StickyStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
+class StickyStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import StickyStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
@@ -419,7 +419,7 @@ class StickyStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyF
       nextStrategy
     }
 
-    def getCluster: Cluster = cluster
+    def getNode: Node = node
 
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
 
