@@ -101,12 +101,6 @@ sealed abstract class NodeMessage extends Serializable {
   def destination: NodeIdentity
 }
 
-class IdentityNodeMessage extends NodeMessage {
-  var identity: NodeIdentity = null
-  var address: NodeAddress = null
-  def destination = null
-} 
-
 case class ActorNodeMessage( recipient: UUID, msg: Any, sender: UUID ) extends NodeMessage { def destination = recipient.nodeId }
 case class ActorNodeAllMessage( nodeId: NodeIdentity, className: String, msg: Any, sender: UUID ) extends NodeMessage { def destination = null }
 case class ActorNodeMessageById( nodeId: NodeIdentity, id: String, msg: Any, sender: UUID ) extends NodeMessage { def destination = null }
