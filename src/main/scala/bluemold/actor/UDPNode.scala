@@ -107,12 +107,13 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
             broadcastSocket.bind( new InetSocketAddress( iAddress, broadcastPort ) )
 
             val nodeInterface = UDPNodeInterface( interface, iAddress )
-
-            val broadcastReceiver = new Thread( new Receiver( broadcastSocket, nodeInterface ), "UDPNode-" + getAppName + "-Broadcast-" + iAddress + ":" + broadcastPort )
+            val broadcastReSender = Actor.actorOf(new ReSender()).start().asInstanceOf[LocalActorRef]
+            val broadcastReceiver = new Thread( new Receiver( broadcastSocket, nodeInterface, broadcastReSender ), "UDPNode-" + getAppName + "-Broadcast-" + iAddress + ":" + broadcastPort )
             broadcastReceiver.setDaemon( true )
             broadcastReceiver.start()
 
-            val socketReceiver = new Thread( new Receiver( socket, nodeInterface ), "UDPNode-" + getAppName + "-Receiver-" + iAddress + ":" + socket.getLocalPort )
+            val socketReSender = Actor.actorOf(new ReSender()).start().asInstanceOf[LocalActorRef]
+            val socketReceiver = new Thread( new Receiver( socket, nodeInterface, socketReSender ), "UDPNode-" + getAppName + "-Receiver-" + iAddress + ":" + socket.getLocalPort )
             socketReceiver.setDaemon( true )
             socketReceiver.start()
 
@@ -232,9 +233,11 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
   
   def send( nodeId: NodeIdentity, message:NodeMessage, sender: LocalActorRef ) {
     val out = new ByteArrayOutputStream
+    Node.forSerialization.set( UDPNode.this )
     val objectOut = new ObjectOutputStream( out )
     objectOut.writeObject( message )
     objectOut.flush()
+    Node.forSerialization.set( null )
     send( nodeId, out, sender )
   }
 
@@ -311,7 +314,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
   
   def getTypeNum( mType: Byte ) = mType % 16
 
-  final class Receiver( socket: DatagramSocket, nodeInterface: UDPNodeInterface ) extends Runnable {
+  final class Receiver( socket: DatagramSocket, nodeInterface: UDPNodeInterface, reSender: LocalActorRef ) extends Runnable {
     def run() {
       val buffer = new Array[Byte](16384)
       val packet = new DatagramPacket(buffer,buffer.length)
@@ -347,7 +350,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
                     val dataSize = if ( remainder < chunkSize ) remainder else chunkSize
                     receivingMessage.addChunk( index, data, dataOffset + 59, dataSize ) // offset = 1 + 32 + 16 + 4 + 2 + 4
                     if ( receivingMessage.isComplete ) {
-                      receivingMessage.processMessageOnce( packet.getAddress, packet.getPort, nodeInterface )
+                      receivingMessage.processMessageOnce( packet.getAddress, packet.getPort, nodeInterface, reSender )
                     }
                   case 2 => // MessageReceiptRequest => type(B)(2) + uuid + total size(int32) + chunk size(int16)
                     if ( destination == getNodeId ) {
@@ -412,38 +415,50 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       case _ => // ignore
     }
   }
-  private def processMessage( nodeMessage: NodeMessage, nodeInterface: UDPNodeInterface ) {
-    nodeMessage match {
-        // Todo: Stop and Status should also respect InterfaceRestrictedActor.
-      case StopActorNodeMessage( recipient: UUID, sender: UUID ) =>
-        val actor = getByUUID( recipient )
-        if ( actor != null )
-          actor.stop()
-      case StatusRequestNodeMessage( recipient: UUID, sender: UUID ) =>
-        getByUUID( recipient ) match {
-          case actor: LocalActorRef =>
-            send( sender.nodeId, StatusResponseNodeMessage( sender, recipient, ! actor.isActive ), actor )
-          case _ => // ignore
-        }
-      case StatusResponseNodeMessage( recipient: UUID, sender: UUID, stopped: Boolean ) =>
-        sendMessageToLocalActor( getBaseByUUID( recipient ), stopped, sender, nodeInterface )
-      case ActorNodeMessage( uuid, msg, sender ) =>
-        if ( uuid == null )
-          for ( actor <- getAllBase )
-            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
-        else sendMessageToLocalActor( getBaseByUUID( uuid ), msg, sender, nodeInterface )
-      case ActorNodeAllMessage( nodeId, className, msg, sender ) =>
-        if ( nodeId == null || nodeId == getNodeId )
-          for ( actor <- if ( className == null ) getAllBase else getAllBaseByClassName( className ) )
-            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
-      case ActorNodeMessageById( nodeId, id, msg, sender ) =>
-        if ( nodeId == null || nodeId == getNodeId )
-          for ( actor <- if ( id == null ) getAllBase else getAllBaseById( id ) )
-            sendMessageToLocalActor( actor, msg, sender, nodeInterface )
-      case _ => throw new RuntimeException( "What Happened!" )
+  private def processMessage( nodeMessage: NodeMessage, nodeInterface: UDPNodeInterface, reSender: LocalActorRef ) {
+    if ( nodeMessage.destination == null || nodeMessage.destination == _nodeId ) {
+      nodeMessage match {
+          // Todo: Stop and Status should also respect InterfaceRestrictedActor.
+        case StopActorNodeMessage( recipient: UUID, sender: UUID ) =>
+          val actor = getByUUID( recipient )
+          if ( actor != null )
+            actor.stop()
+        case StatusRequestNodeMessage( recipient: UUID, sender: UUID ) =>
+          getByUUID( recipient ) match {
+            case actor: LocalActorRef =>
+              send( sender.nodeId, StatusResponseNodeMessage( sender, recipient, ! actor.isActive ), actor )
+            case _ => // ignore
+          }
+        case StatusResponseNodeMessage( recipient: UUID, sender: UUID, stopped: Boolean ) =>
+          sendMessageToLocalActor( getBaseByUUID( recipient ), stopped, sender, nodeInterface )
+        case ActorNodeMessage( uuid, msg, sender ) =>
+          if ( uuid == null )
+            for ( actor <- getAllBase )
+              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+          else sendMessageToLocalActor( getBaseByUUID( uuid ), msg, sender, nodeInterface )
+        case ActorNodeAllMessage( nodeId, className, msg, sender ) =>
+          if ( nodeId == null || nodeId == getNodeId )
+            for ( actor <- if ( className == null ) getAllBase else getAllBaseByClassName( className ) )
+              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+        case ActorNodeMessageById( nodeId, id, msg, sender ) =>
+          if ( nodeId == null || nodeId == getNodeId )
+            for ( actor <- if ( id == null ) getAllBase else getAllBaseById( id ) )
+              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+        case _ => throw new RuntimeException( "What Happened!" )
+      }
+    } else {
+      nodeMessage.destination.path match {
+        case nextHop :: tail => send( nextHop, nodeMessage, reSender )
+        case _ => throw new RuntimeException( "What Happened!" )
+      }
     }
   }
-
+  private class ReSender extends RegisteredActor {
+    protected def init() {}
+    protected def react = {
+      case _ => // todo: resender logic
+    }
+  }
   def writeByte( out: OutputStream, value: Byte ) { out.write( value ) }
   def writeShort( out: OutputStream, value: Short ) {
     var temp: Int = value
@@ -765,7 +780,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       }
     }
     
-    def processMessageOnce( address: InetAddress, port: Int, nodeInterface: UDPNodeInterface ) = {
+    def processMessageOnce( address: InetAddress, port: Int, nodeInterface: UDPNodeInterface, reSender: LocalActorRef ) = {
       synchronized {
         if ( message == null ) {
           Node.forSerialization.set( UDPNode.this )
@@ -778,9 +793,9 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         if ( message != null && ! messageProcessed ) {
           messageProcessed = true
           if ( destination == null )
-            processMessage( message, nodeInterface: UDPNodeInterface )
+            processMessage( message, nodeInterface: UDPNodeInterface, reSender )
           else if ( destination == getNodeId ) {
-            processMessage( message, nodeInterface: UDPNodeInterface )
+            processMessage( message, nodeInterface: UDPNodeInterface, reSender )
             sendReceiptResponse( address, port )
           }
         }
@@ -897,12 +912,12 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
    * then try another interface. If no more interfaces or out of tries then report message failure to node listener.
    * If actor instance of MessageFailureActor then report message as failed.
    * 
-   * MessageChunk => type(B)(1) + uuid(obj) + destCID + total size(int32) + chunk size(int16) + index( start with zero )(int32) + data(B[])
-   * MessageReceiptRequest => type(B)(2) + uuid + destCID + total size(int32) + chunk size(int16)
-   * MessageReceipt => type(B)(3) + uuid + destCID + total size(int32) + chunk size(int16) + errorCode ( 0=success, 1=failure )(int16)
-   * MessageChunksNeeded => type(B)(4) + uuid + destCID + total size(int32) + chunk size(int16) + num ids (int16) + List( id, id, id, id, id ) 
-   * MessageChunkRangesNeeded => type(B)(5) + uuid + destCID + total size(int32) + chunk size(int16) + num ids (int16) + List( id - id, id - id, id - id )
-   * MessageNoLongerExists => type(B)(6) + uuid + destCID + total size(int32) + chunk size(int16)
+   * MessageChunk => type(B)(1) + uuid(obj) + destNID + total size(int32) + chunk size(int16) + index( start with zero )(int32) + data(B[])
+   * MessageReceiptRequest => type(B)(2) + uuid + destNID + total size(int32) + chunk size(int16)
+   * MessageReceipt => type(B)(3) + uuid + destNID + total size(int32) + chunk size(int16) + errorCode ( 0=success, 1=failure )(int16)
+   * MessageChunksNeeded => type(B)(4) + uuid + destNID + total size(int32) + chunk size(int16) + num ids (int16) + List( id, id, id, id, id ) 
+   * MessageChunkRangesNeeded => type(B)(5) + uuid + destNID + total size(int32) + chunk size(int16) + num ids (int16) + List( id - id, id - id, id - id )
+   * MessageNoLongerExists => type(B)(6) + uuid + destNID + total size(int32) + chunk size(int16)
    * 
    * Receiver triggers MessageReceipt upon receiving all chunks
    * If sender does not hear back after a set time he sends a recipt request

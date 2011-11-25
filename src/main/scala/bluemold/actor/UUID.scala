@@ -2,9 +2,9 @@ package bluemold.actor
 
 import bluemold.storage.Store
 import scala.util.Random
-import java.io.Serializable
 import java.lang.IllegalStateException
 import java.util.concurrent.ConcurrentHashMap
+import java.io.{ObjectStreamException, Serializable}
 
 /**
  * NodeIdentity<br/>
@@ -33,16 +33,6 @@ object UUID {
     }
   }
   
-  def parseUUID( identity: String ): UUID = {
-    val idParts = identity.split( UUID.separator )
-    if ( idParts.length == 4 ) {
-      try {
-        new UUID( new NodeIdentity( idParts(0).toLong, idParts(1).toLong ), idParts(2).toLong, idParts(3).toLong )
-      } catch {
-        case _ => null 
-      }
-    } else null
-  }
   def parseNodeIdentity( identity: String ): NodeIdentity = {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 2 ) {
@@ -200,18 +190,54 @@ object NodeIdentity {
     } else registry
   }
 }
-final class NodeIdentity( _time: Long, _rand: Long ) extends Serializable {
-  def time = _time
-  def rand = _rand
-  override def toString: String = _time.toHexString + UUID.separator + _rand.toHexString
 
-  override def equals( obj: Any ): Boolean = {
-    obj match {
-      case cid: NodeIdentity => cid.time == time && cid.rand == rand
-      case _ => false
-    }
+@SerialVersionUID(1L)
+final class NodeIdentity( val time: Long, val rand: Long, val path: List[NodeIdentity] ) extends Serializable {
+  def this( time: Long, rand: Long ) = this( time, rand, Nil )
+  override def toString: String = time.toHexString + UUID.separator + rand.toHexString
+  override def equals( obj: Any ): Boolean = obj match {
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
+    case _ => false
   }
   override def hashCode(): Int = time.hashCode() + rand.hashCode()
+  @throws(classOf[ObjectStreamException])
+  def writeReplace(): AnyRef = {
+    val currentNodeId = Node.forSerialization.get()._nodeId
+    if ( this != currentNodeId ) new TransientNodeIdentity( time, rand, ( currentNodeId :: path ) map { new TransientSimpleNodeIdentity( _ ) } )
+    else new TransientNodeIdentity( time, rand, Nil )
+  }
+}
+
+@SerialVersionUID(1L)
+final class TransientSimpleNodeIdentity( val time: Long, val rand: Long ) extends Serializable {
+  def this( nodeId: NodeIdentity ) = this( nodeId.time, nodeId.rand )
+  override def equals( obj: Any ): Boolean = obj match {
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
+    case _ => false
+  }
+}
+
+@SerialVersionUID(1L)
+final class TransientNodeIdentity( val time: Long, val rand: Long, val path: List[TransientSimpleNodeIdentity] ) extends Serializable {
+  override def equals( obj: Any ): Boolean = obj match {
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
+    case _ => false
+  }
+  @throws(classOf[ObjectStreamException])
+  def readResolve(): AnyRef = {
+    val currentNodeId = Node.forSerialization.get()._nodeId
+    if ( this == currentNodeId ) currentNodeId
+    else if ( path contains currentNodeId ) new NodeIdentity( time, rand,
+      path dropWhile { _ != currentNodeId } drop 1
+      map { t => new NodeIdentity( t.time, t.rand ) } )
+    else new NodeIdentity( time, rand, path map { t => new NodeIdentity( t.time, t.rand ) } )
+  }
 }
 
 final class UUID( _nodeId: NodeIdentity, _time: Long, _rand: Long ) extends Serializable {
