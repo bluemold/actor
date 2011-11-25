@@ -5,6 +5,7 @@ import annotation.tailrec
 import java.util.{Timer, TimerTask}
 import java.lang.{RuntimeException, Throwable}
 
+case object StartMsg
 private[actor] object AbstractActor {
   import org.bluemold.unsafe.Unsafe._
 
@@ -56,9 +57,8 @@ abstract class AbstractActor extends ActorLike {
   }
   
   final private[actor] def _start(): ActorRef = {
-    Unsafe.compareAndSwapInt( this, queueCountOffset, -1, 0 )
-    if ( hasMsg )
-      enqueueIfNeeded()
+    if ( Unsafe.compareAndSwapInt( this, queueCountOffset, -1, 0 ) )
+      this ! StartMsg
     self
   }
   
@@ -151,7 +151,7 @@ abstract class AbstractActor extends ActorLike {
       else
         this.behavior = initialBehavior
     }
-    staticBehavior( msg )
+    if ( msg != StartMsg ) staticBehavior( msg )
   }
   
   protected def staticBehavior( msg: Any ) { behavior( msg ) }
