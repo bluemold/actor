@@ -24,10 +24,10 @@ class BaseActor( actor: Actor )( implicit strategy: ActorStrategy ) extends Abst
 
   protected def react: PartialFunction[Any, Unit] = actor._react
 
-  override def start()(implicit sender: ActorRef): ActorRef = _start()
+  override def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
   override def stop()(implicit sender: ActorRef) { 
-    _stop()
+    _stop()(sender)
     actor._self = null
   }
 
@@ -51,9 +51,9 @@ class BaseSupervisedActor( actor: SupervisedActor, parent: ActorRef )( implicit 
 
   protected def react: PartialFunction[Any, Unit] = actor._react
 
-  override def start()(implicit sender: ActorRef): ActorRef = _start()
+  override def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
-  override def stop()(implicit sender: ActorRef) { _stop() }
+  override def stop()(implicit sender: ActorRef) { _stop()(sender) }
 
   protected def getParent: ActorRef = parent
 
@@ -92,12 +92,12 @@ class BaseRegisteredActor( actor: RegisteredActor, parent: ActorRef )( implicit 
 
   override def start()( implicit sender: ActorRef ): ActorRef = {
     strategy.getNode.register( this );
-    _start()
+    _start()(sender)
   }
 
   override def stop()( implicit sender: ActorRef ) {
     strategy.getNode.unRegister( this );
-    _stop()
+    _stop()(sender)
   }
 
   protected def getParent: ActorRef = parent

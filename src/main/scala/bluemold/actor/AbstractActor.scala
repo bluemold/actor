@@ -56,19 +56,19 @@ abstract class AbstractActor extends ActorLike {
     Unsafe.compareAndSwapObject( this, threadOffset, thread, null )
   }
   
-  final private[actor] def _start(): ActorRef = {
+  final private[actor] def _start()(implicit sender: ActorRef): ActorRef = {
     if ( Unsafe.compareAndSwapInt( this, queueCountOffset, -1, 0 ) )
-      this ! StartMsg
+      this.!(StartMsg)(sender)
     self
   }
   
-  final private[actor] def _stop() {
+  final private[actor] def _stop()(implicit sender: ActorRef) {
     queueCount = -2
   }
 
-  def stop()(implicit sender: ActorRef) { _stop() }
+  def stop()(implicit sender: ActorRef) { _stop()(sender) }
 
-  def start()(implicit sender: ActorRef): ActorRef = _start()
+  def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
   final def !( msg: Any )( implicit sender: ActorRef ) {
     currentStrategy.send( msg, this, sender );
