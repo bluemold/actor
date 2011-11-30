@@ -2,6 +2,7 @@ package bluemold.actor
 
 import java.io._
 import java.lang.ThreadLocal
+import bluemold.storage.Store
 
 /**
  * Node<br/>
@@ -68,6 +69,7 @@ trait Node {
 
   val _nodeId = UUID.getNodeIdentity( getAppName )
   def getNodeId: NodeIdentity = _nodeId
+  def getStore: Store = UUID.getNodeStore( getAppName )
 
   val registry = NodeIdentity.getRegistry( getNodeId )
 

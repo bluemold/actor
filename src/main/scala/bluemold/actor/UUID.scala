@@ -19,8 +19,10 @@ object UUID {
   val nodeIdentityStore = "nodeIdentity"
   val nodeIdentityKey = "identity"
   
+  def getNodeStore( appName: String ): Store = Store.getStore( nodeIdentityStore + "_" + appName )
+
   def getNodeIdentity( appName: String ): NodeIdentity = {
-    val store = Store.getStore( nodeIdentityStore + "_" + appName )
+    val store = getNodeStore( appName )
     store.get( nodeIdentityKey ) match {
       case Some( id ) => {
         try {
