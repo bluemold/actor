@@ -1,4 +1,4 @@
-package bluemold.storage
+package bluemold.actor
 
 import bluemold.concurrent.{AtomicBoolean, NonLockingHashMap}
 import java.util.Properties

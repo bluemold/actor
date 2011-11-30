@@ -1,6 +1,5 @@
 package bluemold.actor
 
-import bluemold.storage.Store
 import scala.util.Random
 import java.lang.IllegalStateException
 import java.util.concurrent.ConcurrentHashMap

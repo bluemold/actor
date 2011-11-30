@@ -2,7 +2,6 @@ package bluemold.actor
 
 import java.io._
 import java.lang.ThreadLocal
-import bluemold.storage.Store
 
 /**
  * Node<br/>
