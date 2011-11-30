@@ -26,14 +26,14 @@ object UUID {
         try {
           parseNodeIdentity( id )
         } catch {
-          case _ => generateNodeIdentity()
+          case _ => generateNodeIdentity( store )
         }
       }
-      case None => generateNodeIdentity()
+      case None => generateNodeIdentity( store )
     }
   }
   
-  def parseNodeIdentity( identity: String ): NodeIdentity = {
+  private def parseNodeIdentity( identity: String ): NodeIdentity = {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 2 ) {
       try {
@@ -43,8 +43,7 @@ object UUID {
       }
     } else throw new IllegalStateException()
   }
-  def generateNodeIdentity(): NodeIdentity = {
-    val store = Store.getStore( nodeIdentityStore )
+  private def generateNodeIdentity( store: Store ): NodeIdentity = {
     val nodeId = new NodeIdentity( System.currentTimeMillis(), Random.nextLong() )
     store.put( nodeIdentityKey, nodeId.toString )
     store.flush()
