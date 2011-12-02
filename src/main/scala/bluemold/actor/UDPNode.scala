@@ -755,6 +755,14 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       }
     }
 
+    def markReceived() {
+      synchronized {
+        status = SuccessfullyReceived
+        stopWaiting()
+        waitTill = System.currentTimeMillis() + waitingAfterReceiptTimeout
+        receivedCompleted.add( this )
+      }
+    }
     def addChunk( index: Int, buf: Array[Byte], offset: Int, length: Int ) {
       synchronized {
         if ( ! chunks.contains( index ) ) {
@@ -762,7 +770,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
          chunks ::= index
         }
         if ( isComplete )
-          stopWaiting()
+          markReceived()
       }
     }
     
