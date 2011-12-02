@@ -38,11 +38,11 @@ object UUID {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 2 ) {
       try {
-        new NodeIdentity( idParts(0).toLong, idParts(1).toLong )
+        new NodeIdentity( java.lang.Long.parseLong( idParts(0), 16 ), java.lang.Long.parseLong( idParts(1), 16 ) )
       } catch {
-        case _ => throw new IllegalStateException() 
+        case e => throw new IllegalStateException(e) 
       }
-    } else throw new IllegalStateException()
+    } else throw new IllegalStateException("identity not formatted correctly")
   }
   private def generateNodeIdentity( store: Store ): NodeIdentity = {
     val nodeId = new NodeIdentity( System.currentTimeMillis(), Random.nextLong() )
