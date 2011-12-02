@@ -22,6 +22,13 @@ object Persist {
       }
     }
   }
+  def writeList( datas: List[Array[Byte]], out: OutputStream, callback: (Boolean) => Unit ) {
+    out.synchronized {
+      datas.synchronized {
+        pool.execute( WriteList( datas, out, callback ) )
+      }
+    }
+  }
   def read( data: Array[Byte], in: InputStream, callback: (Int) => Unit ) {
     in.synchronized {
       data.synchronized {
@@ -39,6 +46,28 @@ case class Write( data: Array[Byte], out: OutputStream, callback: (Boolean) => U
         data.synchronized {
           try {
             out.write( data )
+            out.flush()
+            done = true
+          } catch {
+            case t: IOException => // done is false
+          }
+        }
+      }
+      callback( done )
+    } catch {
+      case t: Throwable => t.printStackTrace()
+    }
+  }
+}
+
+case class WriteList( datas: List[Array[Byte]], out: OutputStream, callback: (Boolean) => Unit ) extends Runnable {
+  def run() {
+    try {
+      var done = false
+      out.synchronized {
+        datas.synchronized {
+          try {
+            datas foreach { out.write( _ ) }
             out.flush()
             done = true
           } catch {

@@ -12,4 +12,7 @@ object Persist {
   def write( data: Array[Byte], out: OutputStream, replyWith: Option[Any] = None )(implicit sender: ActorRef) {
     IOPersist.write( data, out, ( success: Boolean ) => sender ! WroteBytes( success, replyWith ) )
   }
+  def writeList( datas: List[Array[Byte]], out: OutputStream, replyWith: Option[Any] = None )(implicit sender: ActorRef) {
+    IOPersist.writeList( datas, out, ( success: Boolean ) => sender ! WroteBytes( success, replyWith ) )
+  }
 }
