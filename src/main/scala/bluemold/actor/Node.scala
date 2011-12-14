@@ -90,6 +90,7 @@ trait Node {
   def getClassNameCount: Int = registry.getClassNameCount
   def getIdTotal: Int = registry.getIdTotal
   def getClassNameTotal: Int = registry.getClassNameTotal
+  def showNetworkSnapshot( duration: Long )
 }
 
 
