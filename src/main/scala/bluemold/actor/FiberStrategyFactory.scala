@@ -252,6 +252,7 @@ class FiberStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactoryC
     def getNode: Node = node
 
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
+    def getNextBalancedStrategy(): ActorStrategy = getStrategy
 
     var defaultTimeout: Long = 60000 // milliseconds
 

@@ -93,6 +93,7 @@ trait ActorStrategy {
   def send( msg: Any, actor: AbstractActor, sender: ReplyChannel )
   def enqueue( actor: AbstractActor )
   def getNextStrategy(): ActorStrategy
+  def getNextBalancedStrategy(): ActorStrategy
   def getDefaultTimeout(): Long
   def setDefaultTimeout( newDefault: Long )
   def getNode: Node
@@ -337,6 +338,7 @@ trait Actor extends ActorLike {
   final protected def currentStrategy: ActorStrategy = _self.getCurrentStrategy()
 
   final protected def actorOf( actor: Actor ): ActorRef = Actor.actorOf( actor )( getNextStrategy(), self )
+  final protected def balancedActorOf( actor: Actor ): ActorRef = Actor.actorOf( actor )( currentStrategy.getNextStrategy(), self )
 
   protected def handleException( t: Throwable ) { t.printStackTrace() }
 

@@ -415,6 +415,8 @@ final class WrapperActorStrategy( strategy: ActorStrategy, node: Node ) extends 
 
   def getNextStrategy(): ActorStrategy = strategy.getNextStrategy()
 
+  def getNextBalancedStrategy() = strategy.getNextBalancedStrategy()
+
   def enqueue(actor: AbstractActor) { strategy.enqueue( actor ) }
 
   def send(msg: Any, actor: AbstractActor, sender: ReplyChannel) { strategy.send( msg, actor, sender ) }

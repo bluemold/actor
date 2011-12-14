@@ -423,6 +423,8 @@ class StickyStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactory
 
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
 
+    def getNextBalancedStrategy(): ActorStrategy = getStrategy
+
     var defaultTimeout: Long = 60000 // milliseconds
 
     def setDefaultTimeout(newDefault: Long) { defaultTimeout = newDefault }

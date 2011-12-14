@@ -66,6 +66,7 @@ class ExecutorStrategyFactory( implicit node: Node, sfClassLoader: StrategyFacto
       actorCount.incrementAndGet()
       this
     }
+    def getNextBalancedStrategy = getNextStrategy()
 
     var defaultTimeout: Long = 60000 // milliseconds
 
