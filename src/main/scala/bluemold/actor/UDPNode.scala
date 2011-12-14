@@ -33,27 +33,39 @@ object UDPNode {
 
 case class UDPAddress( address: InetAddress, port: Int )
 
-final class UDPNode( localId: LocalNodeIdentity ) extends Node {
+final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
   import UDPNode._
 
   val done = new AtomicBoolean()
 
-  val pollTimeout = 200
-  val waitingForReceiptTimeout = 1000
-  val maxReceiptWaits = 3
-  val waitingAfterReceiptTimeout = 1000
+  val pollTimeout = 100
+  val waitingForReceiptTimeout = 200
+  val maxReceiptWaits = 5
+  val waitingAfterReceiptTimeout = 10000
   val sent = new ConcurrentHashMap[UUID,SendingMessage]
   val sentToProcess = new LinkedBlockingQueue[SendingMessage]
   val sentInWaiting = new CancelableQueue[SendingMessage]
   val sentCompleted = new LinkedBlockingQueue[SendingMessage]
   
-  val waitingForAllChunksTimeout = 1000
-  val maxChunkWaits = 3
-  val waitingAfterCompleteTimeout = 6000
+  val waitingForAllChunksTimeout = 100
+  val maxChunkWaits = 5
+  val waitingAfterCompleteTimeout = 60000
   val received = new ConcurrentHashMap[UUID,ReceivingMessage]
   val receivedInWaiting = new CancelableQueue[ReceivingMessage]
   val receivedCompleted = new LinkedBlockingQueue[ReceivingMessage]
+  val receiveBufferSize = 2 * 1024 * 1024
+  val sendBufferSize = 2 * 1024 * 1024
   
+  val rateLimitDuration = 25L
+  val rateLimitWait = 1L
+  val maxRateLimit = 600
+
+  var showNetworkUntil = 0L
+
+  def showNetworkSnapshot( duration: Long ) {
+    showNetworkUntil = System.currentTimeMillis() + duration 
+  }
+
   private def startSendingMessage( message: SendingMessage ) { 
     sent.put( message.uuid, message )
     sentToProcess.add( message )
@@ -104,6 +116,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
           if ( broadcastAddress != null ) {
             val broadcastSocket = new DatagramSocket( null: SocketAddress )
             broadcastSocket.setReuseAddress( true )
+            broadcastSocket.setReceiveBufferSize( receiveBufferSize )
             broadcastSocket.bind( new InetSocketAddress( iAddress, broadcastPort ) )
 
             val nodeInterface = UDPNodeInterface( interface, iAddress )
@@ -131,6 +144,8 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       try {
         val socket = new DatagramSocket( port, address.getAddress )
         socket.setBroadcast( true )
+        socket.setReceiveBufferSize( receiveBufferSize )
+        socket.setSendBufferSize( sendBufferSize )
         socket
       } catch { case _ => getSocket( port + 1, address ) }
     } else null
@@ -145,11 +160,13 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
   def getDestination( nodeId: NodeIdentity ): Option[(UDPAddress,DatagramSocket)] = {
     val target: UDPAddress = if ( nodeId != null ) {
       val addys = idToAddresses.get( nodeId )
-      addys match {
-        case head :: tail => head
-        case Nil => null
-        case null => null
-      }
+      if ( addys != null ) {
+        val (locals,others) = addys partition { _.address.isLoopbackAddress  }
+        if ( locals.isEmpty ) {
+          // todo choose fastest interface else load balance
+          if ( others.isEmpty ) null else others.head
+        } else locals.head
+      } else null
     } else null
     
     if ( target != null ) {
@@ -345,7 +362,8 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
                 getTypeNum( mType ) match {
                   case 1 => // MessageChunk => type(B)(1) + uuid(obj) + destCID + total size(int32) + chunk size(int16) + index( start with zero )(int32) + data(B[])
                     val index = readInt( in )
-//                    println( "Chunk:   " + uuid + " : " + index + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
+                    if ( showNetworkUntil > System.currentTimeMillis() )
+                      println( "Chunk:   " + uuid + " : " + index + " : " + packet.getAddress + " : " + packet.getPort + " to " + socket.getLocalAddress + " : " + socket.getLocalPort )
                     val remainder = totalSize - index * chunkSize
                     val dataSize = if ( remainder < chunkSize ) remainder else chunkSize
                     receivingMessage.addChunk( index, data, dataOffset + 59, dataSize ) // offset = 1 + 32 + 16 + 4 + 2 + 4
@@ -508,6 +526,10 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
     temp
   }
   def sendMessageNotFound( uuid: UUID, totalSize: Int, chunkSize: Short, address: InetAddress, port: Int ) {
+    if ( showNetworkUntil > System.currentTimeMillis() )
+      println( "MessageNotFound: " + uuid + " : " + address + " : " + port )
+    selfNode.synchronized {
+      rateLimit()
     val socket = getSocketForTarget( new UDPAddress( address, port ) )
     if ( socket != null ) {
       val out = new ByteArrayOutputStream()
@@ -526,6 +548,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         // TODO: report errors
       } catch { case t: Throwable => t.printStackTrace() }
     } // todo: else what?
+    }
   }
 
   sealed abstract class SendingStatus
@@ -533,6 +556,28 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
   case object WaitingForReceipt extends SendingStatus
   case object SuccessfullySent extends SendingStatus
 
+  var rateLimitStartTime = 0L
+  var rateLimitCount = 0
+  
+  def rateLimit() {
+    synchronized {
+      val now = System.currentTimeMillis()
+      if ( now > rateLimitStartTime + rateLimitDuration ) {
+        rateLimitStartTime = now
+        rateLimitCount = 0
+      }
+      while ( rateLimitCount > maxRateLimit ) {
+        wait( rateLimitWait )
+        val now = System.currentTimeMillis()
+        if ( now > rateLimitStartTime + rateLimitDuration ) {
+          rateLimitStartTime = now
+          rateLimitCount = 0
+        }
+      }
+      rateLimitCount += 1
+    }
+  }
+  
   final class SendingMessage( _bytes: Array[Byte], destination: NodeIdentity, chunkSize: Short, sender: LocalActorRef ) {
     val uuid = new UUID( getNodeId )
     val bytes = _bytes
@@ -626,6 +671,10 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
     }
 
     private def send( socket: DatagramSocket, address: InetAddress, port: Int, index: Int ) {
+      if ( showNetworkUntil > System.currentTimeMillis() )
+        println( "SendingChunk: " + index + " : " + uuid + " : " + address + " : " + port )
+      selfNode.synchronized {
+        rateLimit()
       val offset = index * chunkSize
       val remainder = totalSize - offset 
       val size = if ( remainder < chunkSize ) remainder else chunkSize
@@ -653,6 +702,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         socket.send(packet)
         // TODO: report errors
       } catch { case t: Throwable => t.printStackTrace() }
+      }
     }
 
     def requestReceipt() {
@@ -664,6 +714,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
             resetWaiting()
             doRequest = true
           } else {
+            println( "Too many wait for receipts")
             // report and delete
             sent.remove( uuid )
             // todo: report
@@ -682,6 +733,11 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
     }
 
     private def requestReceipt( socket: DatagramSocket, address: InetAddress, port: Int ) {
+      if ( showNetworkUntil > System.currentTimeMillis() )
+        println( "RequestReceipt: " + uuid + " : " + address + " : " + port )
+      selfNode.synchronized {
+        rateLimit()
+      
       val out = new ByteArrayOutputStream()
       writeByte(out,2) // MessageReceiptRequest => type(B)(2) + uuid + destCID + total size(int32) + chunk size(int16)
       writeLong(out,uuid.nodeId.time)
@@ -704,6 +760,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         socket.send(packet)
         // TODO: report errors
       } catch { case t: Throwable => t.printStackTrace() }
+      }
     }
   }
 
@@ -757,6 +814,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
 
     def markReceived() {
       synchronized {
+//        println( "Marked Received!")
         status = SuccessfullyReceived
         stopWaiting()
         waitTill = System.currentTimeMillis() + waitingAfterReceiptTimeout
@@ -825,6 +883,11 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       // todo: else what?
     }
     def sendReceiptResponse( socket: DatagramSocket, address: InetAddress, port: Int ) {
+      if ( showNetworkUntil > System.currentTimeMillis() )
+        println( "ReceiptResponse: " + uuid + " : " + address + " : " + port )
+      selfNode.synchronized {
+        rateLimit()
+      
       val out = new ByteArrayOutputStream()
       writeByte(out,3) // MessageReceipt => type(B)(3) + uuid + total size(int32) + chunk size(int16) + errorCode ( 0=success, 1=failure )(int16)
       writeLong(out,uuid.nodeId.time)
@@ -848,6 +911,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         socket.send(packet)
         // TODO: report errors
       } catch { case t: Throwable => t.printStackTrace() }
+      }
     }
     def requestMissingChunksAndWait() {
       var doRequest = false
@@ -887,6 +951,10 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
       } else requestMissingChunksList( socket, address, port, missing )
     }
     private def requestMissingChunksList( socket: DatagramSocket, address: InetAddress, port: Int, missing: List[Int] ) {
+      println( "Requesting Missing Chunks! num: " + missing.size + " : " + address )
+      selfNode.synchronized {
+        rateLimit()
+      
       val out = new ByteArrayOutputStream()
       writeByte(out,4) // MessageChunksNeeded => type(B)(4) + uuid + total size(int32) + chunk size(int16) + num ids (int16) + List( id, id, id, id, id )
       writeLong(out,uuid.nodeId.time)
@@ -911,6 +979,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node {
         socket.send(packet)
         // TODO: report errors
       } catch { case t: Throwable => t.printStackTrace() }
+      }
     }
   }
   /**
