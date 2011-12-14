@@ -142,14 +142,12 @@ abstract class AbstractActor extends ActorLike {
   // makes react accessible to 
   private[actor] final var behavior: PartialFunction[Any,Unit] = _
   private[actor] final def _behavior( msg: Any ) {
-    val behavior = this.behavior
     if ( behavior == null ) {
       init()
       val initialBehavior = react
       if ( initialBehavior == null )
-        this.behavior = emptyBehavior
-      else
-        this.behavior = initialBehavior
+        behavior = emptyBehavior
+      else behavior = initialBehavior
     }
     if ( msg != StartMsg ) staticBehavior( msg )
   }
@@ -174,6 +172,7 @@ abstract class AbstractActor extends ActorLike {
 
   // @volatile var mailbox = new ConcurrentLinkedQueue[Any] 
   @volatile var mailbox: List[(Any,ReplyChannel)] = Nil 
+  var postbox: List[(Any,ReplyChannel)] = Nil 
 
   private[actor] def doGetNextStrategy(): ActorStrategy = getNextStrategy()
 
