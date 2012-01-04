@@ -38,10 +38,12 @@ class ThreadToActorTest extends TestCase("threadToActor") {
 
       }).start()
       
-      ( actor ? "hi" ) { case msg => println( msg ) }
-      ( actor ? 1 ) {
-        case msg => ( actor ? msg ) {
-          case msg => println( msg )
+      interact {
+        ( actor ? "hi" ) { case msg => println( msg ) }
+        ( actor ? 1 ) {
+          case msg => ( actor ? msg ) {
+            case msg => println( msg )
+          }
         }
       }
     }
