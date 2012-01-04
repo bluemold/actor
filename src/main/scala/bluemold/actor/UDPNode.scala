@@ -251,10 +251,13 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
   def send( nodeId: NodeIdentity, message:NodeMessage, sender: LocalActorRef ) {
     val out = new ByteArrayOutputStream
     Node.forSerialization.set( UDPNode.this )
-    val objectOut = new ObjectOutputStream( out )
-    objectOut.writeObject( message )
-    objectOut.flush()
-    Node.forSerialization.set( null )
+    try {
+      val objectOut = new ObjectOutputStream( out )
+      objectOut.writeObject( message )
+      objectOut.flush()
+    } finally {
+      Node.forSerialization.remove()
+    }
     send( nodeId, out, sender )
   }
 
@@ -850,11 +853,14 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
       synchronized {
         if ( message == null ) {
           Node.forSerialization.set( UDPNode.this )
-          message = new ObjectInputStream( new ByteArrayInputStream( bytes ) ).readObject() match {
-            case message: NodeMessage => message
-            case _ => null
-          } 
-          Node.forSerialization.set( null )
+          try {
+            message = new ObjectInputStream( new ByteArrayInputStream( bytes ) ).readObject() match {
+              case message: NodeMessage => message
+              case _ => null
+            }
+          } finally {
+            Node.forSerialization.remove()
+          }
         }
         if ( message != null && ! messageProcessed ) {
           messageProcessed = true
