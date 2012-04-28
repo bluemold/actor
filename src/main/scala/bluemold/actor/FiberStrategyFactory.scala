@@ -14,14 +14,19 @@ import org.bluemold.unsafe.Unsafe
  */
 object FiberStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
-  def setDaemon( choice: Boolean ) { useDaemon.set( choice ) } 
+  def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
 }
-class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFactory {
+object StrategyFactoryClassLoader {
+  implicit def wrap( classLoader: ClassLoader ) = StrategyFactoryClassLoader( classLoader )
+  implicit def getStrategyFactoryClassLoader = StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
+}
+case class StrategyFactoryClassLoader( classLoader: ClassLoader )
+class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import FiberStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
   val maxConsecutiveEmptyLoops = 100
-  val maxSameThreadDepth = 15
+  val maxSameThreadDepth = 50
   val maxSameThreadWidth = 1000
   val maxAffinity = 15
   val nextStrategy = AtomicInteger.create() 
@@ -83,6 +88,7 @@ class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFac
     val doneOnWait = AtomicBoolean.create()
     val doneOnAllWait = AtomicBoolean.create()
     val thread = new Thread( this, "FiberStrategy-" + index )
+    thread.setContextClassLoader( sfClassLoader.classLoader )
     thread.setDaemon( useDaemon.get() )
     thread.setPriority( Thread.NORM_PRIORITY )
     val actorCount = AtomicInteger.create()
@@ -294,31 +300,63 @@ class FiberStrategyFactory( implicit cluster: Cluster ) extends ActorStrategyFac
     }
 
     def send( msg: Any, actor: AbstractActor, sender: ReplyChannel ) {
-      if ( Thread.currentThread() == thread && actor.sender == null && sameThreadDepth <= maxSameThreadDepth && sameThreadWidth <= maxSameThreadWidth ) {
-        sameThreadDepth += 1
-        if ( actor._isActive ) {
-          sameThreadWidth += 1
-          // inline of processMsg( msg, actor, sender )
-          try {
-            actor.sender = sender
-            msg match {
-              case replyMsg: ReplyMsg => {
-                val replyAction = replyMsg.replyAction
-                if ( replyAction.isInstanceOf[BlockingReply] )
-                  actor._behavior( replyMsg )
-                else {
-                  actor.sender = replyAction.replyChannel
-                  replyAction.react( replyMsg.msg )
+      if ( Thread.currentThread() == thread && sameThreadDepth <= maxSameThreadDepth && sameThreadWidth <= maxSameThreadWidth ) {
+        if ( actor.sender == null )
+        {
+          sameThreadDepth += 1
+          if ( actor._isActive ) {
+            sameThreadWidth += 1
+            // inline of processMsg( msg, actor, sender )
+            try {
+              actor.sender = sender
+              msg match {
+                case replyMsg: ReplyMsg => {
+                  val replyAction = replyMsg.replyAction
+                  if ( replyAction.isInstanceOf[BlockingReply] )
+                    actor._behavior( replyMsg )
+                  else {
+                    actor.sender = replyAction.replyChannel
+                    replyAction.react( replyMsg.msg )
+                  }
                 }
+                case msg => actor._behavior( msg )
               }
-              case msg => actor._behavior( msg )
             }
-          }
-          catch { case t: Throwable => actor._handleException( t ) }
-          finally { actor.sender = null }
-          // end inline of processMsg( msg, actor, sender )
-        } // isActive
-        sameThreadDepth -=1
+            catch { case t: Throwable => actor._handleException( t ) }
+            finally { actor.sender = null }
+            // end inline of processMsg( msg, actor, sender )
+          } // isActive
+          sameThreadDepth -=1
+        } else if ( actor._isTailMessaging ) {
+          val oldSender = actor.sender;
+          sameThreadDepth += 1
+          if ( actor._isActive ) {
+            sameThreadWidth += 1
+            // inline of processMsg( msg, actor, sender )
+            try {
+              actor.sender = sender
+              msg match {
+                case replyMsg: ReplyMsg => {
+                  val replyAction = replyMsg.replyAction
+                  if ( replyAction.isInstanceOf[BlockingReply] )
+                    actor._behavior( replyMsg )
+                  else {
+                    actor.sender = replyAction.replyChannel
+                    replyAction.react( replyMsg.msg )
+                  }
+                }
+                case msg => actor._behavior( msg )
+              }
+            }
+            catch { case t: Throwable => actor._handleException( t ) }
+            finally { actor.sender = oldSender }
+            // end inline of processMsg( msg, actor, sender )
+          } // isActive
+          sameThreadDepth -=1
+        } else {
+          actor.pushMsg( msg, sender )
+          actor.enqueueIfNeeded()
+        }
       } else {
         actor.pushMsg( msg, sender )
         actor.enqueueIfNeeded()

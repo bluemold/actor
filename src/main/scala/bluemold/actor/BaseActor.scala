@@ -13,6 +13,8 @@ import java.io.ObjectStreamException
  */
 class BaseActor( actor: Actor )( implicit strategy: ActorStrategy ) extends AbstractActor with ActorRef {
 
+  override def isTailMessaging = actor.isTailMessaging
+
   protected implicit final def self: ActorRef = this
 
   protected final def currentStrategy: ActorStrategy = strategy
@@ -39,6 +41,8 @@ class BaseActor( actor: Actor )( implicit strategy: ActorStrategy ) extends Abst
 }
 
 class BaseSupervisedActor( actor: SupervisedActor, parent: ActorRef )( implicit strategy: ActorStrategy ) extends AbstractSupervisedActor with ActorRef {
+
+  override def isTailMessaging = actor.isTailMessaging
 
   protected implicit final def self: ActorRef = this
 
@@ -75,6 +79,8 @@ class BaseSupervisedActor( actor: SupervisedActor, parent: ActorRef )( implicit 
 }
 
 class BaseRegisteredActor( actor: RegisteredActor, parent: ActorRef )( implicit strategy: ActorStrategy ) extends AbstractSupervisedActor with RegisteredActorLike {
+
+  override def isTailMessaging = actor.isTailMessaging
 
   private[actor] val _localRef = new LocalActorRef( this )
   protected implicit final def self: ActorRef = _localRef
@@ -186,6 +192,8 @@ final class LocalActorRef( baseActor: BaseRegisteredActor ) extends ActorRef wit
   def isActive(implicit sender: ActorRef): Boolean = baseActor.isActive
 
   def isPreStart(implicit sender: ActorRef): Boolean = baseActor.isActive
+
+  def isTailMessaging = false
 
   @throws(classOf[ObjectStreamException])
   def writeReplace(): AnyRef = new TransientActorRef( uuid )
@@ -329,7 +337,9 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with
   // Methods are answered with stale information until new information is returned. 
   @volatile var stopped = false
   @volatile var lastStatusCheck = System.currentTimeMillis()
-  
+
+  def isTailMessaging = false
+
   def checkStatus()( implicit sender: ActorRef ) {
     lastStatusCheck = System.currentTimeMillis()
     implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), cluster )
@@ -359,6 +369,8 @@ final class RemoteActorRef( uuid: UUID, cluster: Cluster ) extends ActorRef with
 }
 
 final class WrapperActor( actor: ActorRef ) extends RegisteredActor {
+  override def isTailMessaging = actor.isTailMessaging
+
   protected def init() {}
   protected def react: PartialFunction[Any, Unit] = {
     case msg: Any => {

@@ -251,6 +251,8 @@ abstract class AbstractActor extends ActorLike {
   private[actor] def _requeue( msgs: List[(Any, ReplyChannel)] ) { requeue( msgs ) }
   private[actor] def _onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent =
     onTimeout( delay )( body )( sender )
+
+  val _isTailMessaging = self.isTailMessaging // used by some strategies
 }
 
 abstract class AbstractSupervisedActor extends AbstractActor with SupervisedActorLike {

@@ -249,6 +249,8 @@ final class ThreadActorRef extends ActorRef {
   private[actor] def doGetChildActors: List[ActorRef] = Nil
 
   private[actor] def _getUUID: UUID = null
+
+  def isTailMessaging = false
 }
 
 trait ReplyChannel {
@@ -299,6 +301,7 @@ trait ActorLike {
   protected def requeue( msgs: List[(Any, ReplyChannel)] )
   protected def onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent
 
+  def isTailMessaging: Boolean = false
   protected def handleException( t: Throwable )
   final private[actor] def _handleException( t: Throwable ) { handleException( t ) }
 
@@ -368,6 +371,7 @@ trait ActorRef extends ReplyChannel {
   def isActive( implicit sender: ActorRef ): Boolean
   def isStopped( implicit sender: ActorRef ): Boolean
   def checkStatus()( implicit sender: ActorRef )
+  def isTailMessaging: Boolean
 
   private[actor] def getTimeout(): Long
   private[actor] def getCurrentStrategy(): ActorStrategy
@@ -389,7 +393,7 @@ trait ActorRef extends ReplyChannel {
 
   private[actor] def _getUUID: UUID
 
-  override def equals(obj: AnyRef) = obj match {
+  override def equals(obj: Any) = obj match {
     case ref: ActorRef => ( this eq ref ) || ( _getUUID != null && _getUUID == ref._getUUID )
     case _ => false
   }
