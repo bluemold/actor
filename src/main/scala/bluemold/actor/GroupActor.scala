@@ -44,28 +44,28 @@ object GroupActor {
   }
   final class AllGroup( name: String ) extends GroupDefinition {
     def requestPotentialMembers( actor: GroupActor )( implicit self: ActorRef ) {
-      val cluster = self.getCurrentStrategy().getCluster
+      val node = self.getCurrentStrategy().getNode
       println( "Requesting anyone out there" )
-      cluster.sendAllWithId( name, AnyoneThere( self, actor.state, actor.leader, actor.members ) )
+      node.sendAllWithId( name, AnyoneThere( self, actor.state, actor.leader, actor.members ) )
     }
   }
   final class InterfaceGroup( name: String, interface: NodeInterface ) extends GroupDefinition {
     def requestPotentialMembers( actor: GroupActor )( implicit self: ActorRef ) {
-      val cluster = self.getCurrentStrategy().getCluster
-      cluster.sendAllWithId( name, AnyoneThere( self, actor.state, actor.leader, actor.members ) )
+      val node = self.getCurrentStrategy().getNode
+      node.sendAllWithId( name, AnyoneThere( self, actor.state, actor.leader, actor.members ) )
     }
   }
   final class ExpandableGroup( name: String, initial: List[NodeRoute] )  extends GroupDefinition {
     var potentialNodes = initial
     def requestPotentialMembers( actor: GroupActor )( implicit self: ActorRef ) {
-      val cluster = self.getCurrentStrategy().getCluster
-      potentialNodes foreach { route => cluster.sendAllWithId( route.target, name, AnyoneThere( self, actor.state, actor.leader, actor.members ) ) }
+      val node = self.getCurrentStrategy().getNode
+      potentialNodes foreach { route => node.sendAllWithId( route.target, name, AnyoneThere( self, actor.state, actor.leader, actor.members ) ) }
     }
   }
   final class PredefinedGroup( name: String, nodes: List[NodeRoute] )  extends GroupDefinition {
     def requestPotentialMembers( actor: GroupActor )( implicit self: ActorRef ) {
-      val cluster = self.getCurrentStrategy().getCluster
-      nodes foreach { route => cluster.sendAllWithId( route.target, name, AnyoneThere( self, actor.state, actor.leader, actor.members ) ) }
+      val node = self.getCurrentStrategy().getNode
+      nodes foreach { route => node.sendAllWithId( route.target, name, AnyoneThere( self, actor.state, actor.leader, actor.members ) ) }
     }
   }
 }
@@ -148,9 +148,9 @@ trait GroupActor extends RegisteredActor {
     if ( ret == 0 ) {
       val ret = theirUuid.time compareTo memberUuid.time
       if ( ret == 0 ) {
-        val ret = theirUuid.clusterId.rand compareTo memberUuid.clusterId.rand
+        val ret = theirUuid.nodeId.rand compareTo memberUuid.nodeId.rand
         if ( ret == 0 ) {
-          val ret = theirUuid.clusterId.time compareTo memberUuid.clusterId.time
+          val ret = theirUuid.nodeId.time compareTo memberUuid.nodeId.time
           if ( ret == 0 ) {
             throw new RuntimeException( "Can not ask if a group actor has priority over itself" )
           } else ret > 0

@@ -1,13 +1,12 @@
 package bluemold.actor
 
-import bluemold.storage.Store
 import scala.util.Random
-import java.io.Serializable
 import java.lang.IllegalStateException
 import java.util.concurrent.ConcurrentHashMap
+import java.io.{ObjectStreamException, Serializable}
 
 /**
- * ClusterIdentity<br/>
+ * NodeIdentity<br/>
  * Author: Neil Essy<br/>
  * Created: 5/30/11<br/>
  * <p/>
@@ -16,53 +15,44 @@ import java.util.concurrent.ConcurrentHashMap
 
 object UUID {
   val separator = "-"
-  val clusterIdentityStore = "clusterIdentity"
-  val clusterIdentityKey = "identity"
+  val nodeIdentityStore = "nodeIdentity"
+  val nodeIdentityKey = "identity"
   
-  def getClusterIdentity( appName: String ): ClusterIdentity = {
-    val store = Store.getStore( clusterIdentityStore + "_" + appName )
-    store.get( clusterIdentityKey ) match {
+  def getNodeStore( appName: String ): Store = Store.getStore( nodeIdentityStore + "_" + appName )
+
+  def getNodeIdentity( appName: String ): NodeIdentity = {
+    val store = getNodeStore( appName )
+    store.get( nodeIdentityKey ) match {
       case Some( id ) => {
         try {
-          parseClusterIdentity( id )
+          parseNodeIdentity( id )
         } catch {
-          case _ => generateClusterIdentity()
+          case _ => generateNodeIdentity( store )
         }
       }
-      case None => generateClusterIdentity()
+      case None => generateNodeIdentity( store )
     }
   }
   
-  def parseUUID( identity: String ): UUID = {
-    val idParts = identity.split( UUID.separator )
-    if ( idParts.length == 4 ) {
-      try {
-        new UUID( new ClusterIdentity( idParts(0).toLong, idParts(1).toLong ), idParts(2).toLong, idParts(3).toLong )
-      } catch {
-        case _ => null 
-      }
-    } else null
-  }
-  def parseClusterIdentity( identity: String ): ClusterIdentity = {
+  private def parseNodeIdentity( identity: String ): NodeIdentity = {
     val idParts = identity.split( UUID.separator )
     if ( idParts.length == 2 ) {
       try {
-        new ClusterIdentity( idParts(0).toLong, idParts(1).toLong )
+        new NodeIdentity( java.lang.Long.parseLong( idParts(0), 16 ), java.lang.Long.parseLong( idParts(1), 16 ) )
       } catch {
-        case _ => throw new IllegalStateException() 
+        case e => throw new IllegalStateException(e) 
       }
-    } else throw new IllegalStateException()
+    } else throw new IllegalStateException("identity not formatted correctly")
   }
-  def generateClusterIdentity(): ClusterIdentity = {
-    val store = Store.getStore( clusterIdentityStore )
-    val clusterId = new ClusterIdentity( System.currentTimeMillis(), Random.nextLong() )
-    store.put( clusterIdentityKey, clusterId.toString )
+  private def generateNodeIdentity( store: Store ): NodeIdentity = {
+    val nodeId = new NodeIdentity( System.currentTimeMillis(), Random.nextLong() )
+    store.put( nodeIdentityKey, nodeId.toString )
     store.flush()
-    clusterId
+    nodeId
   }
 }
 
-final class ClusterRegistry {
+final class NodeRegistry {
   val byClassName = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
   val byId = new ConcurrentHashMap[String,ConcurrentHashMap[LocalActorRef,BaseRegisteredActor]]
   val byUUID = new ConcurrentHashMap[UUID,BaseRegisteredActor]
@@ -189,40 +179,76 @@ final class ClusterRegistry {
   def getBaseByUUID( uuid: UUID ): BaseRegisteredActor = byUUID.get( uuid )
 }
 
-object ClusterIdentity {
-  val registryMap = new ConcurrentHashMap[ClusterIdentity,ClusterRegistry]()
-  def getRegistry( clusterId: ClusterIdentity ): ClusterRegistry = {
-    val registry = registryMap.get( clusterId )
+object NodeIdentity {
+  val registryMap = new ConcurrentHashMap[NodeIdentity,NodeRegistry]()
+  def getRegistry( nodeId: NodeIdentity ): NodeRegistry = {
+    val registry = registryMap.get( nodeId )
     if ( registry == null ) {
-      val newRegistry = new ClusterRegistry
-      val oldRegistry = registryMap.put( clusterId, newRegistry )
+      val newRegistry = new NodeRegistry
+      val oldRegistry = registryMap.put( nodeId, newRegistry )
       if ( oldRegistry != null ) oldRegistry else newRegistry
     } else registry
   }
 }
-final class ClusterIdentity( _time: Long, _rand: Long ) extends Serializable {
-  def time = _time
-  def rand = _rand
-  override def toString: String = _time.toHexString + UUID.separator + _rand.toHexString
 
-  override def equals( obj: Any ): Boolean = {
-    obj match {
-      case cid: ClusterIdentity => cid.time == time && cid.rand == rand
-      case _ => false
-    }
-  }
-  override def hashCode(): Int = time.hashCode() + rand.hashCode()
-}
-
-final class UUID( _clusterId: ClusterIdentity, _time: Long, _rand: Long ) extends Serializable {
-  def this( _clusterId: ClusterIdentity ) = this( _clusterId, System.currentTimeMillis(), Random.nextLong() )
-  def clusterId = _clusterId
-  def time = _time
-  def rand = _rand
-  override def toString: String = _clusterId.toString + UUID.separator + _time.toHexString + UUID.separator + _rand.toHexString
+@SerialVersionUID(1L)
+final class NodeIdentity( val time: Long, val rand: Long, val path: List[NodeIdentity] ) extends Serializable {
+  def this( time: Long, rand: Long ) = this( time, rand, Nil )
+  override def toString: String = time.toHexString + UUID.separator + rand.toHexString
   override def equals( obj: Any ): Boolean = obj match {
-    case uuid: UUID => uuid.clusterId == clusterId && uuid.time == time && uuid.rand == rand
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
     case _ => false
   }
-  override def hashCode(): Int = clusterId.hashCode() + time.hashCode() + rand.hashCode()
+  override def hashCode(): Int = time.hashCode() + rand.hashCode()
+  @throws(classOf[ObjectStreamException])
+  def writeReplace(): AnyRef = {
+    val currentNodeId = Node.forSerialization.get()._nodeId
+    if ( this != currentNodeId ) new TransientNodeIdentity( time, rand, ( currentNodeId :: path ) map { new TransientSimpleNodeIdentity( _ ) } )
+    else new TransientNodeIdentity( time, rand, Nil )
+  }
+}
+
+@SerialVersionUID(1L)
+final class TransientSimpleNodeIdentity( val time: Long, val rand: Long ) extends Serializable {
+  def this( nodeId: NodeIdentity ) = this( nodeId.time, nodeId.rand )
+  override def equals( obj: Any ): Boolean = obj match {
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
+    case _ => false
+  }
+}
+
+@SerialVersionUID(1L)
+final class TransientNodeIdentity( val time: Long, val rand: Long, val path: List[TransientSimpleNodeIdentity] ) extends Serializable {
+  override def equals( obj: Any ): Boolean = obj match {
+    case cid: NodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientSimpleNodeIdentity => cid.time == time && cid.rand == rand
+    case cid: TransientNodeIdentity => cid.time == time && cid.rand == rand
+    case _ => false
+  }
+  @throws(classOf[ObjectStreamException])
+  def readResolve(): AnyRef = {
+    val currentNodeId = Node.forSerialization.get()._nodeId
+    if ( this == currentNodeId ) currentNodeId
+    else if ( path contains currentNodeId ) new NodeIdentity( time, rand,
+      path dropWhile { _ != currentNodeId } drop 1
+      map { t => new NodeIdentity( t.time, t.rand ) } )
+    else new NodeIdentity( time, rand, path map { t => new NodeIdentity( t.time, t.rand ) } )
+  }
+}
+
+final class UUID( _nodeId: NodeIdentity, _time: Long, _rand: Long ) extends Serializable {
+  def this( _nodeId: NodeIdentity ) = this( _nodeId, System.currentTimeMillis(), Random.nextLong() )
+  def nodeId = _nodeId
+  def time = _time
+  def rand = _rand
+  override def toString: String = _nodeId.toString + UUID.separator + _time.toHexString + UUID.separator + _rand.toHexString
+  override def equals( obj: Any ): Boolean = obj match {
+    case uuid: UUID => uuid.nodeId == nodeId && uuid.time == time && uuid.rand == rand
+    case _ => false
+  }
+  override def hashCode(): Int = nodeId.hashCode() + time.hashCode() + rand.hashCode()
 }

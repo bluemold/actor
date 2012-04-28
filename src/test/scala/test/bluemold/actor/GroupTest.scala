@@ -7,9 +7,9 @@ import bluemold.actor._
 import collection.immutable.HashMap
 import bluemold.actor.GroupActor.GroupActorState
 
-object GroupClusterTest {
+object GroupTest {
     def suite: Test = {
-        val suite = new TestSuite(classOf[ClusterTest]);
+        val suite = new TestSuite(classOf[GroupTest]);
         suite
     }
 
@@ -19,16 +19,16 @@ object GroupClusterTest {
 }
 
 /**
- * Unit test for actor clustering.
+ * Unit test for group actors.
  */
-class GroupClusterTest extends TestCase("cluster") {
+class GroupTest extends TestCase("group") {
 
   val latchOne = new CountDownLatch(1)
   val latchTwo = new CountDownLatch(1)
 
   def testBasics() {
-    val fred = clusterOne()
-    val george = clusterTwo()
+    val fred = nodeOne()
+    val george = nodeTwo()
 
     fred ! "announce"
     george ! "announce"
@@ -43,19 +43,19 @@ class GroupClusterTest extends TestCase("cluster") {
     synchronized { wait( 10000 ) }
   }
   
-  def clusterOne(): ActorRef = {
-    implicit val cluster = UDPCluster.getCluster( "clusterOne", "default" )
+  def nodeOne(): ActorRef = {
+    implicit val node = UDPNode.getNode( "nodeOne", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    actorOf( new GroupClusterActor( "Fred", latchOne ) ).start()
+    actorOf( new GroupTestActor( "Fred", latchOne ) ).start()
   }
     
-  def clusterTwo(): ActorRef = {
-    implicit val cluster = UDPCluster.getCluster( "clusterTwo", "default" )
+  def nodeTwo(): ActorRef = {
+    implicit val node = UDPNode.getNode( "nodeTwo", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    actorOf( new GroupClusterActor( "George", latchTwo) ).start()
+    actorOf( new GroupTestActor( "George", latchTwo) ).start()
   }
 
-  class GroupClusterActor( name: String, latch: CountDownLatch ) extends GroupActor {
+  class GroupTestActor( name: String, latch: CountDownLatch ) extends GroupActor {
     var count: Int = _
 
     override protected def getId = "test"
@@ -70,8 +70,8 @@ class GroupClusterTest extends TestCase("cluster") {
     }
     val myReact: PartialFunction[Any, Unit] = {
       case "announce" => {
-        println( getCluster )
-        getCluster.sendAll( classOf[GroupClusterActor].getName, name )
+        println( getNode )
+        getNode.sendAll( classOf[GroupTestActor], name )
       }
       case msg: String => {
         if ( msg != name ) {

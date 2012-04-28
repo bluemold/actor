@@ -1,4 +1,4 @@
-package bluemold.storage
+package bluemold.actor
 
 import bluemold.concurrent.{AtomicBoolean, NonLockingHashMap}
 import java.util.Properties
@@ -25,6 +25,7 @@ trait Store {
   def remove( key: String )
   def isChanged: Boolean
   def flush()
+  def getFileContainer( name: String ): File
 }
 
 trait StoreFactory {
@@ -95,4 +96,11 @@ class FileStore( name: String ) extends Store {
     }
   }
 
+  def getFileContainer(name: String) = {
+    val parentDir = new File( parentPath )
+    val container = new File( parentDir, this.name + ".files/" + name )
+    if ( ! container.exists() )
+      container.mkdirs()
+    container
+  }
 }

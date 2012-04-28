@@ -3,11 +3,11 @@ package test.bluemold.actor
 import junit.framework._
 import bluemold.actor.Actor._
 import java.util.concurrent.CountDownLatch
-import bluemold.actor.{ActorRef, RegisteredActor, FiberStrategyFactory, UDPCluster}
+import bluemold.actor.{ActorRef, RegisteredActor, FiberStrategyFactory, UDPNode}
 
-object ClusterTest {
+object NetworkTest {
     def suite: Test = {
-        val suite = new TestSuite(classOf[ClusterTest]);
+        val suite = new TestSuite(classOf[NetworkTest]);
         suite
     }
 
@@ -19,14 +19,14 @@ object ClusterTest {
 /**
  * Unit test for actor clustering.
  */
-class ClusterTest extends TestCase("cluster") {
+class NetworkTest extends TestCase("network") {
 
   val latchOne = new CountDownLatch(1)
   val latchTwo = new CountDownLatch(1)
 
   def testBasics() {
-    val fred = clusterOne()
-    val george = clusterTwo()
+    val fred = nodeOne()
+    val george = nodeTwo()
 
     fred ! "announce"
     george ! "announce"
@@ -37,19 +37,19 @@ class ClusterTest extends TestCase("cluster") {
     synchronized { wait( 1000 ) }
   }
   
-  def clusterOne(): ActorRef = {
-    implicit val cluster = UDPCluster.getCluster( "clusterOne", "default" )
+  def nodeOne(): ActorRef = {
+    implicit val node = UDPNode.getNode( "nodeOne", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    actorOf( new ClusterActor( "Fred", latchOne ) ).start()
+    actorOf( new NodeActor( "Fred", latchOne ) ).start()
   }
     
-  def clusterTwo(): ActorRef = {
-    implicit val cluster = UDPCluster.getCluster( "clusterTwo", "default" )
+  def nodeTwo(): ActorRef = {
+    implicit val node = UDPNode.getNode( "nodeTwo", "default" )
     implicit val strategyFactory = new FiberStrategyFactory()
-    actorOf( new ClusterActor( "George", latchTwo) ).start()
+    actorOf( new NodeActor( "George", latchTwo) ).start()
   }
 
-  class ClusterActor( name: String, latch: CountDownLatch ) extends RegisteredActor {
+  class NodeActor( name: String, latch: CountDownLatch ) extends RegisteredActor {
     var count: Int = _
 
     protected def init() {
@@ -58,8 +58,8 @@ class ClusterTest extends TestCase("cluster") {
 
     protected def react: PartialFunction[Any, Unit] = {
       case "announce" => {
-        println( getCluster )
-        getCluster.sendAll( classOf[ClusterActor].getName, name )
+        println( getNode )
+        getNode.sendAll( classOf[NodeActor], name )
       }
       case msg: String => {
         if ( msg != name ) {

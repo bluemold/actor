@@ -1,9 +1,9 @@
 package bluemold.actor
 
-import java.lang.ThreadLocal
 import org.bluemold.unsafe.Unsafe
 import annotation.tailrec
 import java.util.concurrent.Semaphore
+import java.lang.ThreadLocal
 
 object Actor {
   def actorOf( actor: Actor )( implicit strategy: ActorStrategy, parent: ActorRef ): ActorRef = {
@@ -40,7 +40,38 @@ object Actor {
   }
   def defaultFactory = ActorStrategyFactory.defaultStrategyFactory
   def defaultStrategy = defaultFactory.getStrategy
+
+  private val threadActorRefs = new ThreadLocal[ThreadActorRef]
+
+  def interact( body: => Unit ) {
+    val threadActorRef = threadActorRefs.get()
+    if ( threadActorRef == null ) {
+      try {
+        val newThreadActorRef = new ThreadActorRef
+        threadActorRefs.set( newThreadActorRef )
+        body
+      } finally {
+        threadActorRefs.remove()  
+      }
+    } else {
+      body
+    }
+  }
+
+  private[actor] def getCurrentInteractRef: ActorRef = {
+    val threadActorRef = threadActorRefs.get()
+    if ( threadActorRef == null ) NullActorRef 
+    else threadActorRef
+  }
 }
+
+object StrategyFactoryClassLoader {
+  implicit def wrap( classLoader: ClassLoader ) = new StrategyFactoryClassLoader( classLoader )
+  implicit def getStrategyFactoryClassLoader = new StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
+}
+
+class StrategyFactoryClassLoader( val classLoader: ClassLoader )
+
 object ActorStrategyFactory {
 
   @volatile private var _defaultStrategyFactory: ActorStrategyFactory = null
@@ -67,6 +98,7 @@ object ActorStrategyFactory {
   }
   
 }
+
 trait ActorStrategyFactory {
   def getStrategy: ActorStrategy
   def shutdownNow()
@@ -84,12 +116,83 @@ trait ActorStrategy {
   def send( msg: Any, actor: AbstractActor, sender: ReplyChannel )
   def enqueue( actor: AbstractActor )
   def getNextStrategy(): ActorStrategy
+  def getNextBalancedStrategy(): ActorStrategy
   def getDefaultTimeout(): Long
   def setDefaultTimeout( newDefault: Long )
-  def getCluster: Cluster
+  def getNode: Node
 }
 
-// TODO: Model ThreadActorRef so threads can interact with actors in a natural way
+object NullActorRef extends ActorRef {
+  def !(msg: Any)(implicit sender: ActorRef) {}
+
+  def ?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) { throw new RuntimeException( "Can't ask anything of the null actor" ) }
+
+  def !?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) { throw new RuntimeException( "Can't ask anything of the null actor" ) }
+
+  def !!(msg: Any)(implicit sender: ActorRef): Future[Any] = throw new RuntimeException( "Can't ask anything of the null actor" )
+
+  def forward(msg: Any)(implicit sender: ActorRef) { throw new RuntimeException( "Can't ask anything of the null actor" ) }
+
+  def start(): ActorRef = throw new RuntimeException( "Can't start the null actor" )
+
+  def stop() { throw new RuntimeException( "Can't stop the null actor" ) }
+
+  def issueReply(msg: Any)(implicit sender: ActorRef) {}
+
+  private[actor] def blockOn( replyAction: ReplyAction ) {}
+
+  private[actor] def currentReplyChannel: ReplyChannel = null
+
+  private[actor] def isBlockingOnAsync: Boolean = false
+
+  private[actor] def doGetNextStrategy(): ActorStrategy = null
+
+  private[actor] def getCurrentStrategy(): ActorStrategy = null
+
+  var timeout: Long = 0
+
+  def setTimeout( newTimeout: Long ) { timeout = newTimeout }
+
+  private[actor] def getTimeout(): Long = timeout
+
+  def isPreStart: Boolean = false
+
+  def isActive: Boolean = true
+
+  def isStopped: Boolean = false
+
+  private[actor] def _requeue(msgs: List[(Any, ReplyChannel)]) {}
+
+  private[actor] def _requeue(msg: Any, sender: ReplyChannel) {}
+
+  private[actor] def _become(react: PartialFunction[Any, Unit]) {}
+
+  private[actor] def _reply( msg: Any ) {}
+
+  private[actor] def doGetParent: ActorRef = null
+
+  private[actor] def doLink(actor: ActorRef) {}
+
+  private[actor] def doUnlink(actor: ActorRef) {}
+
+  private[actor] def doGetChildActors: List[ActorRef] = Nil
+
+  private[actor] def _getUUID: UUID = null
+
+  def start()(implicit sender: ActorRef) = this
+
+  def stop()(implicit sender: ActorRef) {}
+
+  def isPreStart(implicit sender: ActorRef) = false
+
+  def isActive(implicit sender: ActorRef) = true
+
+  def isStopped(implicit sender: ActorRef) = false
+
+  def checkStatus()(implicit sender: ActorRef) {}
+
+  private[actor] def _onTimeout(delay: Long)(body: => Any)(implicit sender: ActorRef) = throw new RuntimeException( "What Happened!" )
+}
 
 object ThreadActorRef {
   val mailboxOffset = Unsafe.objectDeclaredFieldOffset( classOf[ThreadActorRef], "mailbox" )
@@ -100,24 +203,24 @@ final class ThreadActorRef extends ActorRef {
   val sem = new Semaphore(0)
   @volatile var mailbox: List[(Any,ReplyChannel)] = Nil 
   
-  private[actor] final def hasMsg: Boolean = ! mailbox.isEmpty
+  private[actor] def hasMsg: Boolean = ! mailbox.isEmpty
 
   @tailrec
-  private[actor] final def pushMsg( msg: Any, sender: ReplyChannel ) {
+  private[actor] def pushMsg( msg: Any, sender: ReplyChannel ) {
     val curMailbox = mailbox
     if ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, (msg,sender) :: curMailbox ) )
       pushMsg( msg, sender )
   }
 
   @tailrec
-  private[actor] final def pushMsgs( msgs: List[(Any,ReplyChannel)] ) {
+  private[actor] def pushMsgs( msgs: List[(Any,ReplyChannel)] ) {
     val curMailbox = mailbox
     if ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, msgs ::: curMailbox ) )
       pushMsgs( msgs )
   }
 
   @tailrec
-  private[actor] final def popMsg(): (Any,ReplyChannel) = {
+  private[actor] def popMsg(): (Any,ReplyChannel) = {
     val curMailbox = mailbox
     curMailbox match {
       case head :: tail => {
@@ -131,7 +234,7 @@ final class ThreadActorRef extends ActorRef {
   }
 
   @tailrec
-  private[actor] final def popAllMsg(): List[(Any,ReplyChannel)] = {
+  private[actor] def popAllMsg(): List[(Any,ReplyChannel)] = {
     val curMailbox = mailbox
     curMailbox match {
       case Nil => Nil
@@ -305,7 +408,7 @@ trait ActorLike {
   protected def handleException( t: Throwable )
   final private[actor] def _handleException( t: Throwable ) { handleException( t ) }
 
-  final protected def getCluster: Cluster = currentStrategy.getCluster
+  final protected def getNode: Node = currentStrategy.getNode
 }
 
 trait SupervisedActorLike extends ActorLike {
@@ -331,6 +434,7 @@ trait Actor extends ActorLike {
   final protected def currentStrategy: ActorStrategy = _self.getCurrentStrategy()
 
   final protected def actorOf( actor: Actor ): ActorRef = Actor.actorOf( actor )( getNextStrategy(), self )
+  final protected def balancedActorOf( actor: Actor ): ActorRef = Actor.actorOf( actor )( currentStrategy.getNextStrategy(), self )
 
   protected def handleException( t: Throwable ) { t.printStackTrace() }
 
@@ -345,18 +449,7 @@ trait Actor extends ActorLike {
     _self._onTimeout( delay )( body )( sender )
 }
 object ActorRef {
-  implicit def defaultActorRef: ActorRef = getThreadActorRef
-
-  val threadActorRefs = new ThreadLocal[ThreadActorRef]
-
-  def getThreadActorRef = {
-    val threadActorRef = threadActorRefs.get()
-    if ( threadActorRef == null ) {
-      val newThreadActorRef = new ThreadActorRef
-      threadActorRefs.set( newThreadActorRef )
-      newThreadActorRef
-    } else threadActorRef
-  }
+  implicit def defaultActorRef: ActorRef = Actor.getCurrentInteractRef
 }
 trait ActorRef extends ReplyChannel {
   def !( msg: Any )( implicit sender: ActorRef )

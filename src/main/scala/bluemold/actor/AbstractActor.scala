@@ -5,6 +5,7 @@ import annotation.tailrec
 import java.util.{Timer, TimerTask}
 import java.lang.{RuntimeException, Throwable}
 
+case object StartMsg
 private[actor] object AbstractActor {
   import org.bluemold.unsafe.Unsafe._
 
@@ -55,20 +56,19 @@ abstract class AbstractActor extends ActorLike {
     Unsafe.compareAndSwapObject( this, threadOffset, thread, null )
   }
   
-  final private[actor] def _start(): ActorRef = {
-    Unsafe.compareAndSwapInt( this, queueCountOffset, -1, 0 )
-    if ( hasMsg )
-      enqueueIfNeeded()
+  final private[actor] def _start()(implicit sender: ActorRef): ActorRef = {
+    if ( Unsafe.compareAndSwapInt( this, queueCountOffset, -1, 0 ) )
+      this.!(StartMsg)(sender)
     self
   }
   
-  final private[actor] def _stop() {
+  final private[actor] def _stop()(implicit sender: ActorRef) {
     queueCount = -2
   }
 
-  def stop()(implicit sender: ActorRef) { _stop() }
+  def stop()(implicit sender: ActorRef) { _stop()(sender) }
 
-  def start()(implicit sender: ActorRef): ActorRef = _start()
+  def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
   final def !( msg: Any )( implicit sender: ActorRef ) {
     currentStrategy.send( msg, this, sender );
@@ -142,16 +142,14 @@ abstract class AbstractActor extends ActorLike {
   // makes react accessible to 
   private[actor] final var behavior: PartialFunction[Any,Unit] = _
   private[actor] final def _behavior( msg: Any ) {
-    val behavior = this.behavior
     if ( behavior == null ) {
       init()
       val initialBehavior = react
       if ( initialBehavior == null )
-        this.behavior = emptyBehavior
-      else
-        this.behavior = initialBehavior
+        behavior = emptyBehavior
+      else behavior = initialBehavior
     }
-    staticBehavior( msg )
+    if ( msg != StartMsg ) staticBehavior( msg )
   }
   
   protected def staticBehavior( msg: Any ) { behavior( msg ) }
@@ -174,6 +172,7 @@ abstract class AbstractActor extends ActorLike {
 
   // @volatile var mailbox = new ConcurrentLinkedQueue[Any] 
   @volatile var mailbox: List[(Any,ReplyChannel)] = Nil 
+  var postbox: List[(Any,ReplyChannel)] = Nil 
 
   private[actor] def doGetNextStrategy(): ActorStrategy = getNextStrategy()
 
