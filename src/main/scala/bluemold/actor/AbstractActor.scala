@@ -4,6 +4,7 @@ import org.bluemold.unsafe.Unsafe
 import annotation.tailrec
 import java.util.{Timer, TimerTask}
 import java.lang.{RuntimeException, Throwable}
+import java.io._
 
 case object StartMsg
 private[actor] object AbstractActor {
@@ -25,6 +26,7 @@ private[actor] object AbstractActor {
 abstract class AbstractActor extends ActorLike {
   import AbstractActor._
   protected implicit def self: ActorRef // could be handled as thread local
+  def _isTailMessaging = self.isTailMessaging // used by some strategies
   @volatile var queueCount: Int = -1 // doubles as status ( -1 means waiting to start, -2 means stopped ), used by most strategies
   @volatile var thread: Thread = null // used by some strategies
   
@@ -70,34 +72,54 @@ abstract class AbstractActor extends ActorLike {
 
   def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
+  private def ensureContext( msg: Any, sender: ActorRef ): Any = 
+    if ( sender.isInstanceOf[LocalActorRef] ) {
+      val senderClassLoader = sender.getCurrentStrategy().getClassLoader
+      val classLoader = currentStrategy.getClassLoader
+      if ( senderClassLoader != classLoader ) {
+        Node.forSerialization.set( getNode )
+        try {
+          val out = new ByteArrayOutputStream
+          val objectOut = new ObjectOutputStream( out )
+          objectOut.writeObject( msg )
+          objectOut.flush()
+          new ObjectInputStream( new ByteArrayInputStream( out.toByteArray ) ) {
+            override def resolveClass( desc: ObjectStreamClass ) = Class.forName( desc.getName, false, classLoader )
+          }.readObject()
+        } finally {
+          Node.forSerialization.remove()
+        }
+      } else msg
+    } else msg
+
   final def !( msg: Any )( implicit sender: ActorRef ) {
-    currentStrategy.send( msg, this, sender );
+    currentStrategy.send( ensureContext( msg, sender ), this, sender );
   }
   final def ?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = if ( sender.isBlockingOnAsync ) {
       val blockingReplyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
       blockingReplyAction
     } else new ReplyAction( sender, react, sender.currentReplyChannel ) 
-    currentStrategy.send( msg, this, replyAction )
+    currentStrategy.send( ensureContext( msg, sender ), this, replyAction )
     if ( sender.isBlockingOnAsync )
       sender.blockOn( replyAction )
   }
   final def !?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-    currentStrategy.send( msg, this, replyAction )
+    currentStrategy.send( ensureContext( msg, sender ), this, replyAction )
     sender.blockOn( replyAction )
   }
   final def !!(msg: Any)(implicit sender: ActorRef): Future[Any] = {
     val future = new AbstractFuture
     future.setExpiration( sender.getTimeout() )
-    currentStrategy.send( msg, this, future )
+    currentStrategy.send( ensureContext( msg, sender ), this, future )
     future
   }
   final def forward(msg: Any)(implicit sender: ActorRef) {
-    currentStrategy.send( msg, this, sender.currentReplyChannel )
+    currentStrategy.send( ensureContext( msg, sender ), this, sender.currentReplyChannel )
   }
   final def reply( msg: Any ) {
-    sender.issueReply(msg)
+    sender.issueReply(msg)(self)
   }
   final def issueReply( msg: Any )(implicit sender: ActorRef) {
     currentStrategy.send( msg, this, sender )
@@ -250,8 +272,6 @@ abstract class AbstractActor extends ActorLike {
   private[actor] def _requeue( msgs: List[(Any, ReplyChannel)] ) { requeue( msgs ) }
   private[actor] def _onTimeout( delay: Long )( body: => Any )(implicit sender: ActorRef): CancelableEvent =
     onTimeout( delay )( body )( sender )
-
-  val _isTailMessaging = self.isTailMessaging // used by some strategies
 }
 
 abstract class AbstractSupervisedActor extends AbstractActor with SupervisedActorLike {

@@ -89,6 +89,8 @@ object ActorStrategyFactory {
   implicit def defaultStrategyFactory: ActorStrategyFactory = {
     if ( _defaultStrategyFactory == null ) {
       synchronized {
+        // todo: hack!!! try and load indirectly via getDefaultNode
+        Node.getDefaultNode
         if ( _defaultStrategyFactory == null ) {
           _defaultStrategyFactory = new FiberStrategyFactory()
         }
@@ -120,6 +122,7 @@ trait ActorStrategy {
   def getDefaultTimeout(): Long
   def setDefaultTimeout( newDefault: Long )
   def getNode: Node
+  def getClassLoader: ClassLoader
 }
 
 object NullActorRef extends ActorRef {
@@ -192,6 +195,8 @@ object NullActorRef extends ActorRef {
   def checkStatus()(implicit sender: ActorRef) {}
 
   private[actor] def _onTimeout(delay: Long)(body: => Any)(implicit sender: ActorRef) = throw new RuntimeException( "What Happened!" )
+
+  def isTailMessaging = false
 }
 
 object ThreadActorRef {

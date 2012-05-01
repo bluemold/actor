@@ -44,8 +44,6 @@ trait Node {
   def getAppName: String
   def getGroupName: String
 
-  private[actor] def send( nodeId: NodeIdentity, message:NodeMessage, sender: LocalActorRef )
-
   def send( uuid: UUID, msg: Any, sender: UUID )
 
   def send( uuid: UUID, msg: Any )( implicit sender: ActorRef )
@@ -66,6 +64,9 @@ trait Node {
 
   def sendAllWithId(id: String, msg: Any)(implicit sender: ActorRef) { sendAllWithId( null, id, msg ) }
 
+  def stopRemoteActor( target: UUID, sender: LocalActorRef )
+  def requestRemoteStatus( target: UUID, sender: LocalActorRef )
+  
   val _nodeId = UUID.getNodeIdentity( getAppName )
   def getNodeId: NodeIdentity = _nodeId
   def getStore: Store = UUID.getNodeStore( getAppName )
@@ -93,22 +94,7 @@ trait Node {
   def showNetworkSnapshot( duration: Long )
 }
 
-
-
-class NodeAddress extends Serializable
-
 final case class NodeRoute( target: NodeIdentity, intermediate: List[NodeIdentity] )
-
-sealed abstract class NodeMessage extends Serializable {
-  def destination: NodeIdentity
-}
-
-case class ActorNodeMessage( recipient: UUID, msg: Any, sender: UUID ) extends NodeMessage { def destination = recipient.nodeId }
-case class ActorNodeAllMessage( nodeId: NodeIdentity, className: String, msg: Any, sender: UUID ) extends NodeMessage { def destination = null }
-case class ActorNodeMessageById( nodeId: NodeIdentity, id: String, msg: Any, sender: UUID ) extends NodeMessage { def destination = null }
-case class StopActorNodeMessage( recipient: UUID, sender: UUID ) extends NodeMessage { def destination = recipient.nodeId }
-case class StatusRequestNodeMessage( recipient: UUID, sender: UUID ) extends NodeMessage { def destination = recipient.nodeId }
-case class StatusResponseNodeMessage( recipient: UUID, sender: UUID, stopped: Boolean ) extends NodeMessage { def destination = recipient.nodeId }
 
 abstract class NodeInterface
 

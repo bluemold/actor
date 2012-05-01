@@ -218,7 +218,7 @@ final class RemoteActorRef( uuid: UUID, node: Node ) extends ActorRef with Seria
 
   def stop()(implicit sender: ActorRef) {
     sender match {
-      case localSender: LocalActorRef => node.send( uuid.nodeId, StopActorNodeMessage( uuid, localSender._getUUID ), localSender )
+      case localSender: LocalActorRef => node.stopRemoteActor( uuid, localSender )
       case _ => throw new IllegalArgumentException( "Only registered actors are allowed to send messages across a network")
     }
   }
@@ -345,7 +345,7 @@ final class RemoteActorRef( uuid: UUID, node: Node ) extends ActorRef with Seria
     implicit val wrapperStrategy = new WrapperActorStrategy( sender.getCurrentStrategy(), node )
     val statusActor = actorOf( new StatusActor( this ) ).start()
     statusActor match {
-      case localStatusActor: LocalActorRef => node.send( uuid.nodeId, StatusRequestNodeMessage( uuid, localStatusActor._getUUID ), localStatusActor )
+      case localStatusActor: LocalActorRef => node.requestRemoteStatus( uuid, localStatusActor )
       case _ => // todo: what do we do here?
     }
   }
@@ -432,4 +432,7 @@ final class WrapperActorStrategy( strategy: ActorStrategy, node: Node ) extends 
   def enqueue(actor: AbstractActor) { strategy.enqueue( actor ) }
 
   def send(msg: Any, actor: AbstractActor, sender: ReplyChannel) { strategy.send( msg, actor, sender ) }
+
+  def getClassLoader = strategy.getClassLoader
+
 }

@@ -6,6 +6,7 @@ import annotation.tailrec
 import bluemold.concurrent.{CancelableQueue, AtomicBoolean}
 import java.io._
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit, ConcurrentHashMap}
+import java.nio.charset.Charset
 
 case class LocalNodeIdentity( appName: String, groupName: String )
 
@@ -36,6 +37,7 @@ case class UDPAddress( address: InetAddress, port: Int )
 final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
   import UDPNode._
 
+  val UTF8 = Charset.forName("utf8")
   val done = new AtomicBoolean()
 
   val pollTimeout = 100
@@ -66,12 +68,14 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     showNetworkUntil = System.currentTimeMillis() + duration 
   }
 
-  private def startSendingMessage( message: SendingMessage ) { 
+  private def startSendingMessage( message: SendingMessage ) {
+    println( "TRACE: SendingMessage: " + message )
     sent.put( message.uuid, message )
     sentToProcess.add( message )
   }
 
   private def startReceivingMessage( message: ReceivingMessage ): ReceivingMessage = {
+    println( "TRACE: ReceivingMessage: " + message )
     val oldMessage = received.putIfAbsent( message.uuid, message )
     if ( oldMessage == null ) {
       message.startWaiting()
@@ -246,27 +250,35 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     startSendingMessage( msg )
   } 
 
-  
-  
-  def send( nodeId: NodeIdentity, message:NodeMessage, sender: LocalActorRef ) {
+  private def serialize( msg: Any ): Array[Byte] = {
     val out = new ByteArrayOutputStream
     Node.forSerialization.set( UDPNode.this )
     try {
       val objectOut = new ObjectOutputStream( out )
-      objectOut.writeObject( message )
+      objectOut.writeObject( msg )
       objectOut.flush()
     } finally {
       Node.forSerialization.remove()
     }
+    out.toByteArray
+  }
+
+  private def send( nodeId: NodeIdentity, message:NodeMessage, sender: LocalActorRef ) {
+    val out = new ByteArrayOutputStream
+    NodeMessage.serialize( out, message )
     send( nodeId, out, sender )
   }
 
   private def send(uuid: UUID, msg: Any, sender: UUID, localActorRef: LocalActorRef ) {
-    send( uuid.nodeId, ActorNodeMessage( uuid, msg, sender ), localActorRef )
+    val bytes = serialize( msg )
+    val route = new NodeRoute( uuid.nodeId, sender.nodeId :: Nil )
+    send( uuid.nodeId, ActorNodeMessage( route, sender, uuid, bytes, 0, bytes.length ), localActorRef )
   }
 
   def send(uuid: UUID, msg: Any, sender: UUID ) {
-    send( uuid.nodeId, ActorNodeMessage( uuid, msg, sender ), null )
+    val bytes = serialize( msg )
+    val route = new NodeRoute( uuid.nodeId, sender.nodeId :: Nil )
+    send( uuid.nodeId, ActorNodeMessage( route, sender, uuid, bytes, 0, bytes.length ), null )
   }
 
   def send(uuid: UUID, msg: Any)(implicit sender: ActorRef) {
@@ -277,26 +289,48 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
 
   def sendAll(nodeId: NodeIdentity, className: String, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
-    if ( localActorRef != null )
-      send( nodeId, ActorNodeAllMessage( nodeId, className, msg, localActorRef._getUUID ), localActorRef )
+    if ( localActorRef != null ) {
+      val bytes = serialize( msg )
+      val route = new NodeRoute( nodeId, sender._getUUID.nodeId :: Nil )
+      send( nodeId, ActorNodeAllMessage( route, sender._getUUID, className, bytes, 0, bytes.length ), localActorRef )
+    }
   }
 
   def sendAllWithId(nodeId: NodeIdentity, id: String, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
-    if ( localActorRef != null )
-      send( nodeId, ActorNodeMessageById( nodeId, id, msg, localActorRef._getUUID ), localActorRef )
-  }
-  
-  def sendAll(route: List[NodeIdentity], nodeId: NodeIdentity, className: String, msg: Any)(implicit sender: ActorRef) {
-    val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
-    if ( localActorRef != null )
-      send( nodeId, ActorNodeAllMessage( nodeId, className, msg, localActorRef._getUUID ), localActorRef )
+    if ( localActorRef != null ) {
+      val bytes = serialize( msg )
+      val route = new NodeRoute( nodeId, sender._getUUID.nodeId :: Nil )
+      send( nodeId, ActorNodeMessageById( route, sender._getUUID, id, bytes, 0, bytes.length  ), localActorRef )
+    }
   }
 
+  // todo - route parameter needs to be used
+  def sendAll(route: List[NodeIdentity], nodeId: NodeIdentity, className: String, msg: Any)(implicit sender: ActorRef) {
+    val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
+    if ( localActorRef != null ) {
+      val bytes = serialize( msg )
+      val route = new NodeRoute( nodeId, sender._getUUID.nodeId :: Nil )
+      send( nodeId, ActorNodeAllMessage( route, sender._getUUID, className, bytes, 0, bytes.length ), localActorRef )
+    }
+  }
+
+  // todo - route parameter needs to be used
   def sendAllWithId(route: List[NodeIdentity], nodeId: NodeIdentity, id: String, msg: Any)(implicit sender: ActorRef) {
     val localActorRef = if ( sender.isInstanceOf[LocalActorRef] ) sender.asInstanceOf[LocalActorRef] else null
-    if ( localActorRef != null )
-      send( nodeId, ActorNodeMessageById( nodeId, id, msg, localActorRef._getUUID ), localActorRef )
+    if ( localActorRef != null ) {
+      val bytes = serialize( msg )
+      val route = new NodeRoute( nodeId, sender._getUUID.nodeId :: Nil )
+      send( nodeId, ActorNodeMessageById( route, sender._getUUID, id, bytes, 0, bytes.length ), localActorRef )
+    }
+  }
+
+  def stopRemoteActor(target: UUID, sender: LocalActorRef) {
+    // todo
+  }
+
+  def requestRemoteStatus(target: UUID, sender: LocalActorRef) {
+    // todo
   }
 
   def updateNodeAddressMap( nodeId: NodeIdentity, address: InetAddress, port: Int ) {
@@ -425,14 +459,27 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     }
   }
 
-  private def sendMessageToLocalActor( base: BaseRegisteredActor, msg: Any, sender: UUID, nodeInterface: UDPNodeInterface ) {
+  private def deSerialize( bytes: Array[Byte], off: Int, len: Int, actor: BaseRegisteredActor ): Any = {
+    val classLoader = actor.getCurrentStrategy().getClassLoader
+    Node.forSerialization.set( UDPNode.this )
+    try {
+      new ObjectInputStream( new ByteArrayInputStream( bytes, off, len ) ) {
+        override def resolveClass( desc: ObjectStreamClass ) = Class.forName( desc.getName, false, classLoader )
+      }.readObject()
+    } finally {
+      Node.forSerialization.remove()
+    }
+  }
+  private def sendMessageToLocalActor( base: BaseRegisteredActor, sender: UUID, nodeInterface: UDPNodeInterface, msg: Array[Byte], off: Int, len: Int ) {
     base match {
-      case actor: BaseRegisteredActor => actor._actor match {
-        case target: InterfaceRestrictedActor =>
-          if ( target.isInterfaceAllowed( nodeInterface ) )
-            actor._localRef.!(msg)(new RemoteActorRef(sender,UDPNode.this))
-        case _ => actor._localRef.!(msg)(new RemoteActorRef(sender,UDPNode.this))
-      }
+      case actor: BaseRegisteredActor =>
+        val decodedMsg = deSerialize( msg, off, len, actor )
+        actor._actor match {
+          case target: InterfaceRestrictedActor =>
+            if ( target.isInterfaceAllowed( nodeInterface ) )
+              actor._localRef.!(decodedMsg)(new RemoteActorRef(sender,UDPNode.this))
+          case _ => actor._localRef.!(decodedMsg)(new RemoteActorRef(sender,UDPNode.this))
+        }
       case _ => // ignore
     }
   }
@@ -440,31 +487,30 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     if ( nodeMessage.destination == null || nodeMessage.destination == _nodeId ) {
       nodeMessage match {
           // Todo: Stop and Status should also respect InterfaceRestrictedActor.
-        case StopActorNodeMessage( recipient: UUID, sender: UUID ) =>
+        case StopActorNodeMessage(  route, sender, recipient ) =>
           val actor = getByUUID( recipient )
           if ( actor != null )
             actor.stop()
-        case StatusRequestNodeMessage( recipient: UUID, sender: UUID ) =>
+        case StatusRequestNodeMessage( route, sender, recipient ) =>
           getByUUID( recipient ) match {
             case actor: LocalActorRef =>
-              send( sender.nodeId, StatusResponseNodeMessage( sender, recipient, ! actor.isActive ), actor )
+              // todo
             case _ => // ignore
           }
-        case StatusResponseNodeMessage( recipient: UUID, sender: UUID, stopped: Boolean ) =>
-          sendMessageToLocalActor( getBaseByUUID( recipient ), stopped, sender, nodeInterface )
-        case ActorNodeMessage( uuid, msg, sender ) =>
-          if ( uuid == null )
+        case StatusResponseNodeMessage( route, sender, recipient, stopped ) =>
+          // todo
+          // sendMessageToLocalActor( getBaseByUUID( recipient ), stopped, sender, nodeInterface )
+        case ActorNodeMessage( route, sender, recipient, msg, off, len ) =>
+          if ( recipient == null )
             for ( actor <- getAllBase )
-              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
-          else sendMessageToLocalActor( getBaseByUUID( uuid ), msg, sender, nodeInterface )
-        case ActorNodeAllMessage( nodeId, className, msg, sender ) =>
-          if ( nodeId == null || nodeId == getNodeId )
-            for ( actor <- if ( className == null ) getAllBase else getAllBaseByClassName( className ) )
-              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
-        case ActorNodeMessageById( nodeId, id, msg, sender ) =>
-          if ( nodeId == null || nodeId == getNodeId )
-            for ( actor <- if ( id == null ) getAllBase else getAllBaseById( id ) )
-              sendMessageToLocalActor( actor, msg, sender, nodeInterface )
+              sendMessageToLocalActor( actor, sender, nodeInterface, msg, off, len )
+          else sendMessageToLocalActor( getBaseByUUID( recipient ), sender, nodeInterface, msg, off, len )
+        case ActorNodeAllMessage( route, sender, className, msg, off, len ) =>
+          for ( actor <- if ( className == null ) getAllBase else getAllBaseByClassName( className ) )
+            sendMessageToLocalActor( actor, sender, nodeInterface, msg, off, len )
+        case ActorNodeMessageById( route, sender, id, msg, off, len ) =>
+          for ( actor <- if ( id == null ) getAllBase else getAllBaseById( id ) )
+            sendMessageToLocalActor( actor, sender, nodeInterface, msg, off, len )
         case _ => throw new RuntimeException( "What Happened!" )
       }
     } else {
@@ -504,6 +550,11 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     temp >>>= 8; out.write( ( temp & 0xFF ).asInstanceOf[Int] )
     temp >>>= 8; out.write( ( temp & 0xFF ).asInstanceOf[Int] )
   }
+  def writeString( out: OutputStream, value: String ) {
+    val bytes = value.getBytes( UTF8 )
+    writeInt( out, bytes.length )
+    out.write( bytes )
+  }
   def readByte( in: InputStream ): Byte = in.read().asInstanceOf[Byte]
   def readShort( in: InputStream ): Short = {
     var temp: Short = in.read().asInstanceOf[Short]
@@ -527,6 +578,12 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     temp += ( in.read().asInstanceOf[Long] ) * 0x1000000000000L
     temp += ( in.read().asInstanceOf[Long] ) * 0x100000000000000L
     temp
+  }
+  def readString( in: InputStream ): ( String, Int ) = {
+    val len = readInt( in )
+    val bytes = new Array[Byte]( len )
+    in.read( bytes )
+    ( new String( bytes, UTF8 ), len )
   }
   def sendMessageNotFound( uuid: UUID, totalSize: Int, chunkSize: Short, address: InetAddress, port: Int ) {
     if ( showNetworkUntil > System.currentTimeMillis() )
@@ -674,6 +731,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     }
 
     private def send( socket: DatagramSocket, address: InetAddress, port: Int, index: Int ) {
+      println( "TRACE: SendingChunk: " + index + " : " + uuid + " : " + address + " : " + port )
       if ( showNetworkUntil > System.currentTimeMillis() )
         println( "SendingChunk: " + index + " : " + uuid + " : " + address + " : " + port )
       selfNode.synchronized {
@@ -851,17 +909,8 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
     
     def processMessageOnce( address: InetAddress, port: Int, nodeInterface: UDPNodeInterface, reSender: LocalActorRef ) = {
       synchronized {
-        if ( message == null ) {
-          Node.forSerialization.set( UDPNode.this )
-          try {
-            message = new ObjectInputStream( new ByteArrayInputStream( bytes ) ).readObject() match {
-              case message: NodeMessage => message
-              case _ => null
-            }
-          } finally {
-            Node.forSerialization.remove()
-          }
-        }
+        if ( message == null )
+          message = NodeMessage.deSerialize( bytes, 0, bytes.length )
         if ( message != null && ! messageProcessed ) {
           messageProcessed = true
           if ( destination == null )
@@ -1079,6 +1128,107 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
       }
     }
   }
+
+  object NodeMessage {
+    def deSerialize( bytes: Array[Byte], off: Int, len: Int ): NodeMessage = {
+      var bytesRead = 0
+      val in = new ByteArrayInputStream( bytes, off, len )
+      val mType = readByte( in )
+      bytesRead += 1
+      val nPathLength = readInt( in )
+      bytesRead += 4
+      var hops: List[NodeIdentity] = Nil
+      1 until nPathLength foreach { i =>
+        hops ::= new NodeIdentity( readLong( in ), readLong( in ) )
+        bytesRead += 16
+      }
+      val route = new NodeRoute( hops.head, hops.tail.reverse )
+      val senderNode = route.intermediate.head
+      val sender = new UUID( new NodeIdentity( senderNode.time, senderNode.rand, route.intermediate.tail ), readLong( in ), readLong( in ) )
+      bytesRead += 16
+      mType match {
+        case 1 =>
+          val recipent = new UUID( route.target, readLong( in ), readLong( in ) )
+          bytesRead += 16
+          StopActorNodeMessage( route, sender, recipent )
+        case 2 =>
+          val recipent = new UUID( route.target, readLong( in ), readLong( in ) )
+          bytesRead += 16
+          StatusRequestNodeMessage( route, sender, recipent )
+        case 3 =>
+          val recipent = new UUID( route.target, readLong( in ), readLong( in ) )
+          val stopped = ! ( readByte( in ) == 0 )  
+          bytesRead += 17
+          StatusResponseNodeMessage( route, sender, recipent, stopped )
+        case 4 =>
+          val recipent = new UUID( route.target, readLong( in ), readLong( in ) )
+          bytesRead += 16
+          ActorNodeMessage( route, sender, recipent, bytes, off + bytesRead, len - bytesRead  )
+        case 5 =>
+          val ( recipentClass, len ) = readString( in )
+          bytesRead += len
+          ActorNodeAllMessage( route, sender, recipentClass, bytes, off + bytesRead, len - bytesRead )
+        case 6 =>
+          val ( recipentId, len ) = readString( in )
+          bytesRead += len
+          ActorNodeMessageById( route, sender, recipentId, bytes, off + bytesRead, len - bytesRead )
+        case _ => throw new RuntimeException( "Invalid" )
+      }
+    }
+    def writeBeginning( out: OutputStream, mType: Byte, route: NodeRoute, sender: UUID ) {
+      writeByte( out, mType )
+      val nPathLength = route.intermediate.size + 1
+      writeInt( out, nPathLength )
+      route.intermediate foreach { nodeId => writeLong( out, nodeId.time ); writeLong ( out, nodeId.rand ) }
+      writeLong( out, route.target.time )
+      writeLong( out, route.target.rand )
+      writeLong( out, sender.time )
+      writeLong( out, sender.rand )
+    }
+    def serialize( out: OutputStream, message: NodeMessage ) {
+      message match {
+        case StopActorNodeMessage( route, sender, recipent ) =>
+          writeBeginning( out, 1, route, sender )
+          writeLong( out, recipent.time )
+          writeLong( out, recipent.rand )
+        case StatusRequestNodeMessage( route, sender, recipent ) =>
+          writeBeginning( out, 2, route, sender )
+          writeLong( out, recipent.time )
+          writeLong( out, recipent.rand )
+        case StatusResponseNodeMessage( route, sender, recipent, stopped ) =>
+          writeBeginning( out, 3, route, sender )
+          writeLong( out, recipent.time )
+          writeLong( out, recipent.rand )
+          writeByte( out, if ( stopped ) 1 else 0 )
+        case ActorNodeMessage( route, sender, recipent, bytes, off, len ) =>
+          writeBeginning( out, 4, route, sender )
+          writeLong( out, recipent.time )
+          writeLong( out, recipent.rand )
+          out.write( bytes, off, len )
+        case ActorNodeAllMessage( route, sender, recipentClass, bytes, off, len ) =>
+          writeBeginning( out, 5, route, sender )
+          writeString( out, recipentClass )
+          out.write( bytes, off, len )
+        case ActorNodeMessageById( route, sender, recipentId, bytes, off, len ) =>
+          writeBeginning( out, 6, route, sender )
+          writeString( out, recipentId )
+          out.write( bytes, off, len )
+      }
+    }
+  }
+  
+  sealed abstract class NodeMessage extends Serializable {
+    def route: NodeRoute
+    def destination: NodeIdentity = route.target
+    def source: NodeIdentity = route.intermediate.head
+  }
+  
+  case class StopActorNodeMessage( _route: NodeRoute, sender: UUID, recipient: UUID ) extends NodeMessage { def route = _route }
+  case class StatusRequestNodeMessage( _route: NodeRoute, sender: UUID, recipient: UUID ) extends NodeMessage { def route = _route }
+  case class StatusResponseNodeMessage( _route: NodeRoute, sender: UUID, recipient: UUID, stopped: Boolean ) extends NodeMessage { def route = _route }
+  case class ActorNodeMessage( _route: NodeRoute, sender: UUID, recipient: UUID, msg: Array[Byte], off: Int, len: Int ) extends NodeMessage { def route = _route }
+  case class ActorNodeAllMessage( _route: NodeRoute, sender: UUID, className: String, msg: Array[Byte], off: Int, len: Int ) extends NodeMessage { def route = _route }
+  case class ActorNodeMessageById( _route: NodeRoute, sender: UUID, id: String, msg: Array[Byte], off: Int, len: Int ) extends NodeMessage { def route = _route }
 }
 
 case class UDPNodeInterface( interface: NetworkInterface, address: InetAddress ) extends NodeInterface

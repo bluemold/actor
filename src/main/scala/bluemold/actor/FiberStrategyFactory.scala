@@ -16,12 +16,7 @@ object FiberStrategyFactory {
   val useDaemon = AtomicBoolean.create( true )
   def setDaemon( choice: Boolean ) { useDaemon.set( choice ) }
 }
-object StrategyFactoryClassLoader {
-  implicit def wrap( classLoader: ClassLoader ) = StrategyFactoryClassLoader( classLoader )
-  implicit def getStrategyFactoryClassLoader = StrategyFactoryClassLoader( Thread.currentThread().getContextClassLoader )
-}
-case class StrategyFactoryClassLoader( classLoader: ClassLoader )
-class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
+class FiberStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactoryClassLoader ) extends ActorStrategyFactory {
   import FiberStrategyFactory._
   val concurrency = Runtime.getRuntime.availableProcessors()
   val waitTime = 1 // milliseconds
@@ -141,15 +136,40 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
 
           // process actors messages
           var msgs = actor.popAllMsg()
-          while ( ! msgs.isEmpty ) {
+          while ( msgs != Nil ) {
             // inline of processMsgs( msgs, actor )
-            msgs match {
-              case (msg,sender) :: tail => {
-                if ( actor._isActive ) {
-                  // inline of processMsg( msg, actor, sender)
+            val (msg,sender) = msgs.head
+            if ( actor._isActive ) {
+              // inline of processMsg( msg, actor, sender)
+              try {
+                actor.sender = sender
+                msg match {
+                  case replyMsg: ReplyMsg => {
+                    val replyAction = replyMsg.replyAction
+                    if ( replyAction.isInstanceOf[BlockingReply] )
+                      actor._behavior( replyMsg )
+                    else {
+                      actor.sender = replyAction.replyChannel
+                      replyAction.react( replyMsg.msg )
+                    }
+                  }
+                  case anyMsg => actor._behavior( anyMsg )
+                }
+              }
+              catch { case t: Exception => actor._handleException( t ) }
+              finally { actor.sender = null }
+              // end inline of processMsg( msg, actor, sender)
+              // now check and process postbox
+              var postbox = actor.postbox
+              while ( postbox != Nil ) {
+                actor.postbox = Nil
+                while ( postbox != Nil ) {
+                  sameThreadWidth += 1
+                  val (pMsg,pReplyChannel) = postbox.head
+                  postbox = postbox.tail
                   try {
-                    actor.sender = sender
-                    msg match {
+                    actor.sender = pReplyChannel
+                    pMsg match {
                       case replyMsg: ReplyMsg => {
                         val replyAction = replyMsg.replyAction
                         if ( replyAction.isInstanceOf[BlockingReply] )
@@ -159,53 +179,25 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
                           replyAction.react( replyMsg.msg )
                         }
                       }
-                      case msg => actor._behavior( msg )
+                      case anyMsg => actor._behavior( anyMsg )
                     }
                   }
-                  catch { case t: Throwable => actor._handleException( t ) }
+                  catch { case t: Exception => actor._handleException( t ) }
                   finally { actor.sender = null }
-                  // end inline of processMsg( msg, actor, sender)
-                  // now check and process postbox
-                  var postbox = actor.postbox
-                  while ( ! postbox.isEmpty ) {
-                    actor.postbox = Nil
-                    while ( ! postbox.isEmpty ) {
-                      sameThreadWidth += 1
-                      val (pMsg,pReplyChannel) = postbox.head
-                      postbox = postbox.tail
-                      try {
-                        actor.sender = pReplyChannel
-                        pMsg match {
-                          case replyMsg: ReplyMsg => {
-                            val replyAction = replyMsg.replyAction
-                            if ( replyAction.isInstanceOf[BlockingReply] )
-                              actor._behavior( replyMsg )
-                            else {
-                              actor.sender = replyAction.replyChannel
-                              replyAction.react( replyMsg.msg )
-                            }
-                          }
-                          case pMsg => actor._behavior( pMsg )
-                        }
-                      }
-                      catch { case t: Throwable => actor._handleException( t ) }
-                      finally { actor.sender = null }
-                    }
-                    postbox = actor.postbox
-                    if ( ! postbox.isEmpty && sameThreadWidth > maxSameThreadWidth ) {
-                      actor.postbox foreach { ms => actor.pushMsg( ms._1, ms._2 ) }
-//                      actor.enqueueIfNeeded()
-                      actor.postbox = Nil
-                      postbox = Nil
-                    }
+                }
+                postbox = actor.postbox
+                if ( postbox != Nil ) {
+                  actor.postbox = Nil
+                  if( sameThreadWidth >= maxSameThreadWidth ) {
+                    postbox foreach { ms => actor.pushMsg( ms._1, ms._2 ) }
+                    postbox = Nil
                   }
-                  // end postbox processing
-
-                  msgs = tail
                 }
               }
-              case Nil => // never reached
+              // end postbox processing
+
             }
+            msgs = msgs.tail
             // end inline of processMsgs( msgs, actor )
           }
 
@@ -292,6 +284,8 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
 
     def getNode: Node = node
 
+    def getClassLoader = sfClassLoader.classLoader
+
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
     def getNextBalancedStrategy(): ActorStrategy = getStrategy
 
@@ -303,6 +297,7 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
 
     def start(): SimpleStrategy = { nextStrategy = index; thread.start(); this }
 
+/*
     @tailrec
     def processMsgs( msgs: List[(Any,ReplyChannel)], actor: AbstractActor ) {
       msgs match {
@@ -332,74 +327,108 @@ class FiberStrategyFactory( implicit cluster: Cluster, sfClassLoader: StrategyFa
           case plainMsg => actor._behavior( plainMsg )
         }
       }
-      catch { case t: Throwable => actor._handleException( t ) }
+      catch { case t: Exception => actor._handleException( t ) }
       finally { actor.sender = null }
     }
+*/
 
     def send( msg: Any, actor: AbstractActor, sender: ReplyChannel ) {
-      if ( Thread.currentThread() == thread && sameThreadDepth <= maxSameThreadDepth && sameThreadWidth <= maxSameThreadWidth ) {
-        if ( actor.sender == null ) {
-          sameThreadDepth += 1
-          if ( actor._isActive ) {
-            sameThreadWidth += 1
-            // inline of processMsg( msg, actor, sender )
-            try {
-              actor.sender = sender
-              msg match {
-                case replyMsg: ReplyMsg => {
-                  val replyAction = replyMsg.replyAction
-                  if ( replyAction.isInstanceOf[BlockingReply] )
-                    actor._behavior( replyMsg )
-                  else {
-                    actor.sender = replyAction.replyChannel
-                    replyAction.react( replyMsg.msg )
-                  }
-                }
-                case msg => actor._behavior( msg )
-              }
-            }
-            catch { case t: Throwable => actor._handleException( t ) }
-            finally { actor.sender = null }
-            // end inline of processMsg( msg, actor, sender )
-            // now check and process postbox
-            var postbox = actor.postbox
-            while ( ! postbox.isEmpty ) {
-              actor.postbox = Nil
-              while ( ! postbox.isEmpty ) {
-                sameThreadWidth += 1
-                val (pMsg,pReplyChannel) = postbox.head
-                postbox = postbox.tail
-                try {
-                  actor.sender = pReplyChannel
-                  pMsg match {
-                    case replyMsg: ReplyMsg => {
-                      val replyAction = replyMsg.replyAction
-                      if ( replyAction.isInstanceOf[BlockingReply] )
-                        actor._behavior( replyMsg )
-                      else {
-                        actor.sender = replyAction.replyChannel
-                        replyAction.react( replyMsg.msg )
-                      }
+      if ( Thread.currentThread() == thread ) {
+        if( sameThreadDepth <= maxSameThreadDepth && sameThreadWidth <= maxSameThreadWidth ) {
+          if ( actor.sender == null ) {
+            sameThreadDepth += 1
+            if ( actor._isActive ) {
+              sameThreadWidth += 1
+              // inline of processMsg( msg, actor, sender )
+              try {
+                actor.sender = sender
+                msg match {
+                  case replyMsg: ReplyMsg => {
+                    val replyAction = replyMsg.replyAction
+                    if ( replyAction.isInstanceOf[BlockingReply] )
+                      actor._behavior( replyMsg )
+                    else {
+                      actor.sender = replyAction.replyChannel
+                      replyAction.react( replyMsg.msg )
                     }
-                    case pMsg => actor._behavior( pMsg )
+                  }
+                  case anyMsg => actor._behavior( anyMsg )
+                }
+              }
+              catch { case t: Exception => actor._handleException( t ) }
+              finally { actor.sender = null }
+              // end inline of processMsg( msg, actor, sender )
+              // now check and process postbox
+              var postbox = actor.postbox
+              while ( postbox != Nil ) {
+                actor.postbox = Nil
+                while ( postbox != Nil ) {
+                  sameThreadWidth += 1
+                  val (pMsg,pReplyChannel) = postbox.head
+                  postbox = postbox.tail
+                  try {
+                    actor.sender = pReplyChannel
+                    pMsg match {
+                      case replyMsg: ReplyMsg => {
+                        val replyAction = replyMsg.replyAction
+                        if ( replyAction.isInstanceOf[BlockingReply] )
+                          actor._behavior( replyMsg )
+                        else {
+                          actor.sender = replyAction.replyChannel
+                          replyAction.react( replyMsg.msg )
+                        }
+                      }
+                      case anyMsg => actor._behavior( anyMsg )
+                    }
+                  }
+                  catch { case t: Exception => actor._handleException( t ) }
+                  finally { actor.sender = null }
+                }
+                postbox = actor.postbox
+                if ( postbox != Nil ) {
+                  actor.postbox = Nil
+                  if( sameThreadWidth >= maxSameThreadWidth ) {
+                    postbox foreach { ms => actor.pushMsg( ms._1, ms._2 ) }
+                    actor.enqueueIfNeeded()
+                    postbox = Nil
                   }
                 }
-                catch { case t: Throwable => actor._handleException( t ) }
-                finally { actor.sender = null }
+              }                
+              // end postbox processing
+            } // isActive
+            sameThreadDepth -=1
+          } else if ( actor._isTailMessaging ) {
+            val oldSender = actor.sender
+            sameThreadDepth += 1
+            if ( actor._isActive ) {
+              sameThreadWidth += 1
+              // inline of processMsg( msg, actor, sender )
+              try {
+                actor.sender = sender
+                msg match {
+                  case replyMsg: ReplyMsg => {
+                    val replyAction = replyMsg.replyAction
+                    if ( replyAction.isInstanceOf[BlockingReply] )
+                      actor._behavior( replyMsg )
+                    else {
+                      actor.sender = replyAction.replyChannel
+                      replyAction.react( replyMsg.msg )
+                    }
+                  }
+                  case anyMsg => actor._behavior( anyMsg )
+                }
               }
-              postbox = actor.postbox
-              if ( ! postbox.isEmpty && sameThreadWidth > maxSameThreadWidth ) {
-                actor.postbox foreach { ms => actor.pushMsg( ms._1, ms._2 ) }
-                actor.enqueueIfNeeded()
-                actor.postbox = Nil
-                postbox = Nil
-              }
-            }
-            // end postbox processing
-          } // isActive
-          sameThreadDepth -=1
+              catch { case t: Exception => actor._handleException( t ) }
+              finally { actor.sender = oldSender }
+              // end inline of processMsg( msg, actor, sender )
+            } // isActive
+            sameThreadDepth -=1
+          } else {
+            actor.postbox ::= (msg,sender)
+          }
         } else {
-          actor.postbox ::= (msg,sender)
+          actor.pushMsg( msg, sender )
+          actor.enqueueIfNeeded()
         }
       } else {
         actor.pushMsg( msg, sender )

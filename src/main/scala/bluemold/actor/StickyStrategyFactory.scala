@@ -421,6 +421,8 @@ class StickyStrategyFactory( implicit node: Node, sfClassLoader: StrategyFactory
 
     def getNode: Node = node
 
+    def getClassLoader = sfClassLoader.classLoader
+
     def getNextStrategy(): ActorStrategy = { val strategy = threads( nextStrategyIndex() ); strategy.actorCount.incrementAndGet(); strategy }
 
     def getNextBalancedStrategy(): ActorStrategy = getStrategy

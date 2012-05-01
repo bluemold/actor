@@ -76,6 +76,8 @@ class ExecutorStrategyFactory( implicit node: Node, sfClassLoader: StrategyFacto
 
     def getNode = node
 
+    def getClassLoader = sfClassLoader.classLoader
+
     class ProcessActorMsgs( actor: AbstractActor ) extends Runnable {
       def run() {
         actor.synchronized {
