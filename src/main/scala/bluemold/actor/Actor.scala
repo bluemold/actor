@@ -320,9 +320,9 @@ final class ThreadActorRef extends ActorRef {
 
   private[actor] def isBlockingOnAsync: Boolean = true
 
-  private[actor] def doGetNextStrategy(): ActorStrategy = throw new UnsupportedOperationException( "Thread actor ref has no strategy" )
+  private[actor] def doGetNextStrategy(): ActorStrategy = null
 
-  private[actor] def getCurrentStrategy(): ActorStrategy = throw new UnsupportedOperationException( "Thread actor ref has no strategy" )
+  private[actor] def getCurrentStrategy(): ActorStrategy = null
 
   var timeout: Long = 0
 

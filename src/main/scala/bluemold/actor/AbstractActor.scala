@@ -7,6 +7,7 @@ import java.lang.{RuntimeException, Throwable}
 import java.io._
 
 case object StartMsg
+case object StopMsg
 private[actor] object AbstractActor {
   import org.bluemold.unsafe.Unsafe._
 
@@ -25,11 +26,24 @@ private[actor] object AbstractActor {
 }
 abstract class AbstractActor extends ActorLike {
   import AbstractActor._
-  protected implicit def self: ActorRef // could be handled as thread local
-  def _isTailMessaging = self.isTailMessaging // used by some strategies
+  // makes react accessible to 
+  private[actor] final var behavior: PartialFunction[Any,Unit] = _
+  // current sender, future, or promise, or maybe thread local
+  final var sender: ReplyChannel = null
+  final var _stopped: Boolean = _
+  final var postSender: ReplyChannel = null 
+  final var postMsg: Any = null
+  final var postbox: List[(Any,ReplyChannel)] = Nil 
+  final var _tailMessaging: Boolean = _
+
+  // @volatile var mailbox = new ConcurrentLinkedQueue[Any] 
+  @volatile var mailbox: List[(Any,ReplyChannel)] = Nil 
   @volatile var queueCount: Int = -1 // doubles as status ( -1 means waiting to start, -2 means stopped ), used by most strategies
   @volatile var thread: Thread = null // used by some strategies
-  
+
+  protected implicit def self: ActorRef // could be handled as thread local
+  def _isTailMessaging = self.isTailMessaging // used by some strategies
+
   @tailrec
   private[actor] final def incQueueCount() {
     val current = queueCount
@@ -72,8 +86,9 @@ abstract class AbstractActor extends ActorLike {
 
   def start()(implicit sender: ActorRef): ActorRef = _start()(sender)
 
-  private def ensureContext( msg: Any, sender: ActorRef ): Any = 
-    if ( sender.isInstanceOf[LocalActorRef] ) {
+  @inline
+  private final def ensureContext( msg: Any, sender: ActorRef ): Any = 
+    if ( sender.isInstanceOf[LocalActorRef] || sender.isInstanceOf[AbstractActor] ) {
       val senderClassLoader = sender.getCurrentStrategy().getClassLoader
       val classLoader = currentStrategy.getClassLoader
       if ( senderClassLoader != classLoader ) {
@@ -93,36 +108,50 @@ abstract class AbstractActor extends ActorLike {
     } else msg
 
   final def !( msg: Any )( implicit sender: ActorRef ) {
-    currentStrategy.send( ensureContext( msg, sender ), this, sender );
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, sender );
+    else currentStrategy.send( msg, this, sender );
   }
   final def ?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = if ( sender.isBlockingOnAsync ) {
       val blockingReplyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
       blockingReplyAction
     } else new ReplyAction( sender, react, sender.currentReplyChannel ) 
-    currentStrategy.send( ensureContext( msg, sender ), this, replyAction )
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, replyAction );
+    else currentStrategy.send( msg, this, replyAction );
     if ( sender.isBlockingOnAsync )
       sender.blockOn( replyAction )
   }
   final def !?(msg: Any)(react: PartialFunction[Any, Unit])(implicit sender: ActorRef) {
     val replyAction = new BlockingReplyAction( sender, react, sender.currentReplyChannel )
-    currentStrategy.send( ensureContext( msg, sender ), this, replyAction )
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, replyAction );
+    else currentStrategy.send( msg, this, replyAction );
     sender.blockOn( replyAction )
   }
   final def !!(msg: Any)(implicit sender: ActorRef): Future[Any] = {
     val future = new AbstractFuture
     future.setExpiration( sender.getTimeout() )
-    currentStrategy.send( ensureContext( msg, sender ), this, future )
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, future );
+    else currentStrategy.send( msg, this, future );
     future
   }
   final def forward(msg: Any)(implicit sender: ActorRef) {
-    currentStrategy.send( ensureContext( msg, sender ), this, sender.currentReplyChannel )
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, sender.currentReplyChannel );
+    else currentStrategy.send( msg, this, sender.currentReplyChannel );
   }
+
+  @inline
   final def reply( msg: Any ) {
     sender.issueReply(msg)(self)
   }
   final def issueReply( msg: Any )(implicit sender: ActorRef) {
-    currentStrategy.send( msg, this, sender )
+    if ( sender.getCurrentStrategy() ne currentStrategy )
+      currentStrategy.send( ensureContext( msg, sender ), this, sender );
+    else currentStrategy.send( msg, this, sender );
   }
   private[actor] def currentReplyChannel: ReplyChannel = sender
   private[actor] def isBlockingOnAsync: Boolean = false
@@ -142,9 +171,26 @@ abstract class AbstractActor extends ActorLike {
     }
   }
 
-  final def enqueueIfNeeded() {
+  private[actor] final def pushAndEnqueueIfNeeded( msg: Any, sender: ReplyChannel ) {
+    var curMailbox = mailbox
+    while ( ! Unsafe.compareAndSwapObject( this, mailboxOffset, curMailbox, (msg,sender) :: curMailbox ) )
+      curMailbox = mailbox
     if ( queueCount == 0 ) {
-      incQueueCount()
+      var current = queueCount
+      if ( current >= 0 ) {
+        while ( ! Unsafe.compareAndSwapInt( this, queueCountOffset, current, current + 1 ) )
+          current = queueCount
+      }
+      currentStrategy.enqueue( this )
+    }
+  }
+  private[actor] final def enqueueIfNeeded() {
+    if ( queueCount == 0 ) {
+      var current = queueCount
+      if ( current >= 0 ) {
+        while ( ! Unsafe.compareAndSwapInt( this, queueCountOffset, current, current + 1 ) )
+          current = queueCount
+      }
       currentStrategy.enqueue( this )
     }
   }
@@ -160,18 +206,26 @@ abstract class AbstractActor extends ActorLike {
 
 
   protected implicit final def getNextStrategy() = currentStrategy.getNextStrategy()
-
-  // makes react accessible to 
-  private[actor] final var behavior: PartialFunction[Any,Unit] = _
+  
+  private[actor] final def _init() {
+    _tailMessaging = _isTailMessaging
+    init()
+  }
+  
+  @inline
   private[actor] final def _behavior( msg: Any ) {
     if ( behavior == null ) {
+      _tailMessaging = _isTailMessaging
       init()
       val initialBehavior = react
       if ( initialBehavior == null )
         behavior = emptyBehavior
       else behavior = initialBehavior
     }
-    if ( msg != StartMsg ) staticBehavior( msg )
+    if ( StopMsg == msg ) {
+      _stopped = true
+      queueCount = -2
+    } else if ( StartMsg != msg ) staticBehavior( msg ) 
   }
   
   protected def staticBehavior( msg: Any ) { behavior( msg ) }
@@ -181,9 +235,6 @@ abstract class AbstractActor extends ActorLike {
   // respond to the next message with this react
   protected def become ( react: PartialFunction[Any, Unit] ) { this.behavior = react }
 
-  // current sender, future, or promise, or maybe thread local
-  final var sender: ReplyChannel = null
-  
   // message box methods, leave implementation to specific type of actor
   private[actor] def doGetParent: ActorRef = null
   private[actor] def doLink( actor: ActorRef ) {}
@@ -191,10 +242,6 @@ abstract class AbstractActor extends ActorLike {
   private[actor] def doGetChildActors: List[ActorRef] = Nil
 
   private[actor] def _getUUID: UUID = null
-
-  // @volatile var mailbox = new ConcurrentLinkedQueue[Any] 
-  @volatile var mailbox: List[(Any,ReplyChannel)] = Nil 
-  var postbox: List[(Any,ReplyChannel)] = Nil 
 
   private[actor] def doGetNextStrategy(): ActorStrategy = getNextStrategy()
 
@@ -552,8 +599,8 @@ final class ChildFuture[+T,U]( parent: FutureWithAddReplyChannel[U], g: (U) => T
 class ReplyChannelModifier[T,S]( f: ( T ) => S, channel: ReplyChannel ) extends ReplyChannel {
   def issueReply(msg: Any)(implicit sender: ActorRef) {
     msg match {
-      case msg: T => channel.issueReply( f( msg ) )
-      case msg => channel.issueReply( msg )
+      case t: T => channel.issueReply( f( t ) )
+      case x => channel.issueReply( x )
     }
   }
 }

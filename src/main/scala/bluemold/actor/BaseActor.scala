@@ -309,9 +309,9 @@ final class RemoteActorRef( uuid: UUID, node: Node ) extends ActorRef with Seria
 
   private[actor] def isBlockingOnAsync: Boolean = throw new UnsupportedOperationException()
 
-  private[actor] def doGetNextStrategy(): ActorStrategy = throw new UnsupportedOperationException()
+  private[actor] def doGetNextStrategy(): ActorStrategy = null
 
-  private[actor] def getCurrentStrategy(): ActorStrategy = throw new UnsupportedOperationException()
+  private[actor] def getCurrentStrategy(): ActorStrategy = null
 
   private[actor] def getTimeout(): Long = throw new UnsupportedOperationException()
 
