@@ -6,12 +6,19 @@ import bluemold.concurrent.{AtomicLong, AtomicReference}
 import annotation.tailrec
 import java.nio.charset.Charset
 import java.nio.channels.FileChannel
+import java.text.SimpleDateFormat
+import java.util.Date
 
-class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
-
+object Journal {
+  val KB = 1024
+  val defaultBlockSize = 64 * KB
+  val defaultBlocksPerFile = 256
+}
+class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
+  import Journal._
   def this(dirName: String, blockSize: Int, numBlocksPerFile: Int) = this(new File(dirName), blockSize, numBlocksPerFile)
 
-  def this(dir: File) = this(dir, 64 * 1024, 256)
+  def this(dir: File) = this(dir, defaultBlockSize, defaultBlocksPerFile )
 
   def this(dirName: String) = this(new File(dirName))
 
@@ -19,6 +26,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
 
   var entriesToWrite = new AtomicReference[List[LogEntry]](Nil)
   var pendingCount = new AtomicLong()
+
+  val logFileNameFormat = new SimpleDateFormat( "yyyyMMdd-HHmmssSSS-" )
 
   def getPendingCount = pendingCount.get()
 
@@ -46,6 +55,25 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     if (!entriesToWrite.compareAndSet(old, Nil))
       poll()
     else old
+  }
+
+  var serializers: List[LogEntrySerializer] = Nil
+  def addLogEntrySerializer( serializer: LogEntrySerializer ) {
+    serializers ::= serializer
+  }
+  
+  def forEntries( check: LogEntry => Boolean ) {
+    var entry: LogEntry = null // TODO: get first
+    while ( entry != null && check( entry ) ) {
+       entry = null // TODO: get next
+    }
+  }
+  
+  def reverseForEntries( check: LogEntry => Boolean ) {
+    var entry: LogEntry = null // TODO: get latest
+    while ( entry != null && check( entry ) ) {
+       entry = null // TODO: get prior
+    }
   }
 
   final def log(msg: String) {
@@ -84,7 +112,7 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
       tail.writeEnd()
       val newTail = getNewLogFile
       if (newTail.hasEnoughBlocks(vBlock)) {
-        tail.writeVBlock(vBlock)
+        newTail.writeVBlock(vBlock)
         vBlock.signalEntries()
       } else {
         throw new RuntimeException("What Happened!")
@@ -154,8 +182,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   def isFirstWritten(bytes: Array[Byte]) = {
     bytes(0) == 'f' && bytes(1) == 'r' &&
       bytes(2) == 's' && bytes(3) == 't' &&
-      bytes(blockSize - 4) == 'w' && bytes(blockSize - 3) == 'r' &&
-      bytes(blockSize - 2) == 'o' && bytes(blockSize - 1) == 't'
+      bytes(blockSize - 8) == 'w' && bytes(blockSize - 7) == 'r' &&
+      bytes(blockSize - 6) == 'o' && bytes(blockSize - 5) == 't'
   }
 
   /**
@@ -168,8 +196,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   def isBlockWritten(bytes: Array[Byte]) = {
     bytes(0) == 'w' && bytes(1) == 'r' &&
       bytes(2) == 'i' && bytes(3) == 't' &&
-      bytes(blockSize - 4) == 'w' && bytes(blockSize - 3) == 'r' &&
-      bytes(blockSize - 2) == 'o' && bytes(blockSize - 1) == 't'
+      bytes(blockSize - 8) == 'w' && bytes(blockSize - 7) == 'r' &&
+      bytes(blockSize - 6) == 'o' && bytes(blockSize - 5) == 't'
   }
 
   /**
@@ -183,8 +211,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   def isLastWritten(bytes: Array[Byte]) = {
     bytes(0) == 'l' && bytes(1) == 'a' &&
       bytes(2) == 's' && bytes(3) == 't' &&
-      bytes(blockSize - 4) == 'w' && bytes(blockSize - 3) == 'r' &&
-      bytes(blockSize - 2) == 'o' && bytes(blockSize - 1) == 't'
+      bytes(blockSize - 8) == 'w' && bytes(blockSize - 7) == 'r' &&
+      bytes(blockSize - 6) == 'o' && bytes(blockSize - 5) == 't'
   }
 
   def readSequenceNumber(f: File) = {
@@ -200,7 +228,7 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
 
   var logFiles: List[FileEntry] = {
     val files = dir.listFiles(new FilenameFilter {
-      def accept(dir: File, name: String) = name.endsWith(".log")
+      def accept(dir: File, name: String) = name.startsWith("log-") && name.endsWith(".dat")
     })
     if (files == null) Nil
     else (files map {
@@ -215,15 +243,15 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     else logFiles.tail.foldLeft(logFiles.head)((b: FileEntry, e: FileEntry) => if (b.index > e.index) b else e)
   }
 
-  var currentTailLogFile = getTailLogFile
-  if (currentTailLogFile == null) {
-    currentTailLogFile = getNewLogFile
-  }
-
   nextFileSequenceNumber = getTailDesc match {
     case desc: FileEntry => desc.index + 1
     case null => 1L
   }
+
+  if ( getTailDesc == null) {
+    getNewLogFile
+  }
+
 
   def getTailLogFile: DataFile = {
     val tailDesc = getTailDesc
@@ -238,7 +266,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   def getNewLogFile: DataFile = {
     if (!dir.exists() && !dir.mkdirs())
       throw new RuntimeException("Could not create log dir")
-    val temp = File.createTempFile("log-", ".dat", dir)
+    new SimpleDateFormat( "yyyyMMdd-HHmmssSSS" )
+    val temp = File.createTempFile( "log-"+logFileNameFormat.format( new Date() ) , ".dat", dir)
     val randomAccess = new RandomAccessFile(temp, "rws")
     try {
       randomAccess.setLength(blockSize * numBlocksPerFile)
@@ -262,7 +291,7 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
    * 4 byte padding
    * ... ( entries )
    */
-  class VBlock(log: Log, entries: Array[LogEntry]) {
+  class VBlock(log: Journal, entries: Array[LogEntry]) {
     private[io] val _log = log
     private[io] val _entries = entries
     val (blocks, blocksCount) = {
@@ -371,7 +400,7 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   /**
    * frst last writ wrot
    */
-  class DataFile(log: Log, file: File, blockSize: Int, numBlocksPerFile: Int, sequenceNumber: Long) {
+  class DataFile(log: Journal, file: File, blockSize: Int, numBlocksPerFile: Int, sequenceNumber: Long) {
     var nextWriteBlock = 0
     var vBlocksWritten = 0
     var entriesWritten = 0
@@ -419,6 +448,8 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
         val channel = raf.getChannel
         channel.position(nextWriteBlock * blockSize)
         writeBlocks0(buf, channel, blocks, first = true)
+      } catch {
+        case e: Throwable => e.printStackTrace()
       } finally {
         raf.close()
       }
@@ -557,6 +588,11 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     }
   }
 
+  trait LogEntrySerializer {
+    def canParse( buf: ByteBuffer, off: Int, len: Int ): Boolean
+    def parse( buf: ByteBuffer, off: Int, len: Int ): LogEntry
+  }
+
   trait LogEntry {
     def size: Int
 
@@ -599,28 +635,30 @@ class Log(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     }
   }
 
-}
-
-object TestLog {
-  def main(args: Array[String]) {
-    val testLog = new Log("testLog")
-    println("Logging...")
-    val started = System.currentTimeMillis()
-    while (System.currentTimeMillis() - started < 5000) {
-      if (testLog.getPendingCount < 1000000)
-        1 to 1000 foreach {
-          _ => testLog.log("HelloGoodbye")
+  object Test {
+    def main(args: Array[String]) {
+      val testLog = new Journal("testJournal")
+      println("Writing...")
+      val started = System.currentTimeMillis()
+      var count = 0L
+      while (System.currentTimeMillis() - started < 5000) {
+        if (testLog.getPendingCount < 1000000)
+          1 to 1000 foreach { _ =>
+            testLog.log("HelloGoodbye")
+            count+=1
+          }
+        else synchronized {
+          wait(16)
         }
-      else synchronized {
-        wait(16)
       }
-    }
-    println("Waiting...")
-    while (testLog.getPendingCount > 0) {
-      synchronized {
-        wait(1000)
+      println("Waiting...")
+      while (testLog.getPendingCount > 0) {
+        synchronized {
+          wait(16)
+        }
       }
-      println("Pending: " + testLog.getPendingCount)
+      val end = System.currentTimeMillis()
+      println( "Bytes: " + ( count * 16 ) + " in " + ( end - started ) + "ms" )
     }
   }
 }
