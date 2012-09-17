@@ -9,22 +9,80 @@ import java.nio.channels.FileChannel
 import java.text.SimpleDateFormat
 import java.util.Date
 
+/**
+ * 4 byte length
+ * ... ( bytes )
+ */
+object JournalEntry {
+  @tailrec
+  def readSize(buf: ByteBuffer, len: Int, priorBytes: Int): Int = {
+    if (len > 0)
+      readSize(buf, len - 1, priorBytes << 8 + (buf.get() & 0xff))
+    else priorBytes
+  }
+}
+
+trait JournalEntry {
+  def size: Int
+
+  def writeTo(buf: ByteBuffer, off: Int, len: Int): Int
+
+  def writeSizeTo(buf: ByteBuffer, off: Int, len: Int): Int = {
+    val value = size
+    if (off == 0 && len > 0)
+      buf.put(((value >> 24) & 0xff).toByte)
+    if (off <= 1 && len + off > 1)
+      buf.put(((value >> 16) & 0xff).toByte)
+    if (off <= 2 && len + off > 2)
+      buf.put(((value >> 8) & 0xff).toByte)
+    if (off <= 3 && len + off > 3)
+      buf.put((value & 0xff).toByte)
+
+    if (len > 4 - off) 4 - off else len
+  }
+
+  def signalWritten() {}
+}
+
+trait JournalEntrySerializer {
+  def canParse( buf: Array[Byte], off: Int, len: Int ): Boolean
+  def parse( buf: Array[Byte], off: Int, len: Int ): JournalEntry
+  def canParse( buf: ByteBuffer, off: Int, len: Int ): Boolean
+  def parse( buf: ByteBuffer, off: Int, len: Int ): JournalEntry
+}
+
+
+trait JournalConfig {
+  def blockSize: Int
+  def numBlocksPerFile: Int
+  var serializers: List[JournalEntrySerializer] = Nil
+  def addLogEntrySerializer( serializer: JournalEntrySerializer ) {
+    serializers ::= serializer
+  }
+}
+
 object Journal {
   val KB = 1024
   val defaultBlockSize = 64 * KB
   val defaultBlocksPerFile = 256
+
+  case object DefaultConfig extends JournalConfig {
+    def blockSize = defaultBlockSize
+    def numBlocksPerFile = defaultBlocksPerFile
+  }
 }
-class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
+
+class Journal(dir: File, config: JournalConfig ) {
   import Journal._
-  def this(dirName: String, blockSize: Int, numBlocksPerFile: Int) = this(new File(dirName), blockSize, numBlocksPerFile)
-
-  def this(dir: File) = this(dir, defaultBlockSize, defaultBlocksPerFile )
-
+  val blockSize = config.blockSize
+  val numBlocksPerFile = config.numBlocksPerFile
+  def this(dir: File) = this(dir, DefaultConfig )
   def this(dirName: String) = this(new File(dirName))
+  def this(dirName: String, config: JournalConfig ) = this(new File(dirName), config )
 
   val innerBlockSize = blockSize - 16
 
-  var entriesToWrite = new AtomicReference[List[LogEntry]](Nil)
+  var entriesToWrite = new AtomicReference[List[JournalEntry]](Nil)
   var pendingCount = new AtomicLong()
 
   val logFileNameFormat = new SimpleDateFormat( "yyyyMMdd-HHmmssSSS-" )
@@ -50,27 +108,26 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   logger.start()
 
   @tailrec
-  final def poll(): List[LogEntry] = {
+  final def poll(): List[JournalEntry] = {
     val old = entriesToWrite.get()
     if (!entriesToWrite.compareAndSet(old, Nil))
       poll()
     else old
   }
 
-  var serializers: List[LogEntrySerializer] = Nil
-  def addLogEntrySerializer( serializer: LogEntrySerializer ) {
-    serializers ::= serializer
-  }
-  
-  def forEntries( check: LogEntry => Boolean ) {
-    var entry: LogEntry = null // TODO: get first
+  def forEntries( check: JournalEntry => Boolean ) {
+    var file = getHeadLogFile
+    while ( file != null ) {
+      // todo
+    }
+    var entry: JournalEntry = null // TODO: get first
     while ( entry != null && check( entry ) ) {
        entry = null // TODO: get next
     }
   }
   
-  def reverseForEntries( check: LogEntry => Boolean ) {
-    var entry: LogEntry = null // TODO: get latest
+  def reverseForEntries( check: JournalEntry => Boolean ) {
+    var entry: JournalEntry = null // TODO: get latest
     while ( entry != null && check( entry ) ) {
        entry = null // TODO: get prior
     }
@@ -81,14 +138,14 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   }
 
   @tailrec
-  final def log(logEntry: LogEntry) {
+  final def log(entry: JournalEntry) {
     val old = entriesToWrite.get()
-    if (!entriesToWrite.compareAndSet(old, logEntry :: old))
-      log(logEntry)
+    if (!entriesToWrite.compareAndSet(old, entry :: old))
+      log(entry)
     else pendingCount.incrementAndGet()
   }
 
-  def writeEntries(entries: List[LogEntry]) {
+  def writeEntries(entries: List[JournalEntry]) {
     val tail = getTailLogFile
     var (vBlock, entriesLeft) = createVBlock(tail.freeBlocks, entries.reverse)
     var vBlocks = vBlock :: Nil
@@ -120,11 +177,11 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     }
   }
 
-  def createVBlock(freeBlocks: Int, entries: List[LogEntry]): (VBlock, List[LogEntry]) = {
+  def createVBlock(freeBlocks: Int, entries: List[JournalEntry]): (VBlock, List[JournalEntry]) = {
     val maxVBlockSize = freeBlocks * innerBlockSize
     var currentSize = 16
     var entriesLeft = entries
-    var vBlockEntries: List[LogEntry] = Nil
+    var vBlockEntries: List[JournalEntry] = Nil
     var continueAdding = true
     while (continueAdding && currentSize < maxVBlockSize && !entriesLeft.isEmpty) {
       val entry = entriesLeft.head
@@ -141,6 +198,21 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
   var files: List[FileEntry] = Nil
   var nextFileSequenceNumber = 0L
   val directBuffer = ByteBuffer.allocateDirect(blockSize)
+
+  def getInt( bytes: Array[Byte], index: Int ): Int = {
+    ((bytes(index)&0xff)<<24) & ((bytes(index+1)&0xff)<<16) & ((bytes(index+2)&0xff)<<8) & (bytes(index+3)&0xff)
+  }
+
+  def getLong( bytes: Array[Byte], index: Int ): Long = {
+    var ret = 0L
+    var pos = 0
+    while ( pos < 8 ) {
+      ret <<= 8
+      ret &= (bytes(index+pos)&0xff)
+      pos+=1
+    }
+    ret
+  }
 
   def readBlock(f: File, index: Int) = {
     val bytes = new Array[Byte](blockSize)
@@ -243,6 +315,34 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     else logFiles.tail.foldLeft(logFiles.head)((b: FileEntry, e: FileEntry) => if (b.index > e.index) b else e)
   }
 
+  def getHeadDesc: FileEntry = {
+    if (logFiles == null || logFiles.length == 0) null
+    else if (logFiles.length == 1) logFiles(0)
+    else logFiles.tail.foldLeft(logFiles.head)((b: FileEntry, e: FileEntry) => if (b.index < e.index) b else e)
+  }
+
+  def getNextDesc( current: FileEntry ): FileEntry = {
+    if (logFiles == null || logFiles.length == 0) null
+    else {
+      logFiles.tail.foldLeft( null: FileEntry )( (b: FileEntry, e: FileEntry) =>
+        if ( b == null )
+          if ( e.index > current.index ) e else b
+        else
+          if ( e.index > current.index && e.index < b.index ) e else b )
+    }
+  }
+
+  def getPriorDesc( current: FileEntry ): FileEntry = {
+    if (logFiles == null || logFiles.length == 0) null
+    else {
+      logFiles.tail.foldLeft( null: FileEntry )( (b: FileEntry, e: FileEntry) =>
+        if ( b == null )
+          if ( e.index < current.index ) e else b
+        else
+          if ( e.index < current.index && e.index > b.index ) e else b )
+    }
+  }
+
   nextFileSequenceNumber = getTailDesc match {
     case desc: FileEntry => desc.index + 1
     case null => 1L
@@ -254,12 +354,42 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
 
 
   def getTailLogFile: DataFile = {
-    val tailDesc = getTailDesc
-    if (tailDesc == null) null
+    val desc = getTailDesc
+    if (desc == null) null
     else {
-      val tailFile = new DataFile(this, tailDesc.file, blockSize, numBlocksPerFile, tailDesc.index)
-      tailFile.findNextBlock()
-      tailFile
+      val dataFile = new DataFile(this, desc.file, blockSize, numBlocksPerFile, desc.index)
+      dataFile.findNextBlock()
+      dataFile
+    }
+  }
+
+  def getHeadLogFile: DataFile = {
+    val desc = getTailDesc
+    if (desc == null) null
+    else {
+      val dataFile = new DataFile(this, desc.file, blockSize, numBlocksPerFile, desc.index)
+      dataFile.findNextBlock()
+      dataFile
+    }
+  }
+
+  def getNextLogFile( current: DataFile ): DataFile = {
+    val desc = getNextDesc( current.fileEntry )
+    if (desc == null) null
+    else {
+      val dataFile = new DataFile(this, desc.file, blockSize, numBlocksPerFile, desc.index)
+      dataFile.findNextBlock()
+      dataFile
+    }
+  }
+
+  def getPriorLogFile( current: DataFile ): DataFile = {
+    val desc = getPriorDesc( current.fileEntry )
+    if (desc == null) null
+    else {
+      val dataFile = new DataFile(this, desc.file, blockSize, numBlocksPerFile, desc.index)
+      dataFile.findNextBlock()
+      dataFile
     }
   }
 
@@ -291,7 +421,7 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
    * 4 byte padding
    * ... ( entries )
    */
-  class VBlock(log: Journal, entries: Array[LogEntry]) {
+  class VBlock(log: Journal, entries: Array[JournalEntry]) {
     private[io] val _log = log
     private[io] val _entries = entries
     val (blocks, blocksCount) = {
@@ -405,10 +535,75 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     var vBlocksWritten = 0
     var entriesWritten = 0
 
+    def fileEntry = FileEntry( file, sequenceNumber )
     def initialize() {
       // todo
     }
 
+    var nextVBlock = 0
+    var nextBlock = 1
+    def readVBlock: VBlock = {
+      var bytes = readBlock( file, nextBlock )
+      var entries: List[JournalEntry] = Nil
+      nextBlock += 1
+      val numEntries = getInt( bytes, 12 )
+      var entriesRead = 0
+      var position = 24
+      while ( entriesRead < numEntries ) {
+        // Read size
+        val entrySize =
+          if ( position + 4 <= blockSize - 8 ) {
+            val entrySize = getInt( bytes, position )
+            position += 4
+            entrySize
+          }
+          else {
+            val sizeBytes = new Array[Byte](4)
+            val alreadyRead = blockSize - 8 - position 
+            Array.copy( bytes, position, sizeBytes, 0, alreadyRead )
+            bytes = readBlock( file, nextBlock )
+            nextBlock += 1
+            Array.copy( bytes, 8, sizeBytes, alreadyRead, 4 - alreadyRead )
+            position = 12 - alreadyRead
+            getInt( sizeBytes, 0 )
+          }
+        // Goto next block if needed
+        if ( position == blockSize - 8 ) {
+          bytes = readBlock( file, nextBlock )
+          nextBlock += 1
+          position = 8
+        }
+        // Read bytes
+        val entryBytes = new Array[Byte]( entrySize )
+        var bytesRead = 0
+        while ( bytesRead < entrySize ) {
+          if ( position + entrySize <= blockSize - 8 ) {
+            val bytesToRead = entrySize - bytesRead
+            Array.copy( bytes, position, entryBytes, bytesRead, bytesToRead )
+            position += bytesToRead
+            bytesRead = entrySize
+          } else {
+            val bytesToRead = blockSize - 8 - position
+            Array.copy( bytes, position, entryBytes, bytesRead, bytesToRead )
+            bytesRead += bytesToRead
+            bytes = readBlock( file, nextBlock )
+            nextBlock += 1
+            position = 8
+          }
+        }
+        // Goto next block if needed
+        if ( position == blockSize - 8 ) {
+          bytes = readBlock( file, nextBlock )
+          nextBlock += 1
+          position = 8
+        }
+        // todo - deserialize
+        entries ::= GenericEntry( entryBytes )
+        entriesRead += 1
+      }
+      new VBlock( log, entries.reverse.toArray )
+    }
+    
     def freeBlocks: Int = numBlocksPerFile - nextWriteBlock - 1
 
     def hasEnoughBlocks(vBlock: VBlock): Boolean = freeBlocks >= vBlock.numBlocks
@@ -575,51 +770,21 @@ class Journal(dir: File, blockSize: Int, numBlocksPerFile: Int) {
     }
   }
 
-  /**
-   * 4 byte length
-   * ... ( bytes )
-   */
-  object LogEntry {
-    @tailrec
-    def readSize(buf: ByteBuffer, len: Int, priorBytes: Int): Int = {
-      if (len > 0)
-        readSize(buf, len - 1, priorBytes << 8 + (buf.get() & 0xff))
-      else priorBytes
+  case class GenericEntry(bytes: Array[Byte]) extends JournalEntry {
+    def size = bytes.length
+
+    def writeTo(buf: ByteBuffer, off: Int, len: Int): Int = {
+      val old = buf.position()
+      buf.put(bytes, off, len)
+      buf.position() - old
     }
-  }
-
-  trait LogEntrySerializer {
-    def canParse( buf: ByteBuffer, off: Int, len: Int ): Boolean
-    def parse( buf: ByteBuffer, off: Int, len: Int ): LogEntry
-  }
-
-  trait LogEntry {
-    def size: Int
-
-    def writeTo(buf: ByteBuffer, off: Int, len: Int): Int
-
-    def writeSizeTo(buf: ByteBuffer, off: Int, len: Int): Int = {
-      val value = size
-      if (off == 0 && len > 0)
-        buf.put(((value >> 24) & 0xff).toByte)
-      if (off <= 1 && len + off > 1)
-        buf.put(((value >> 16) & 0xff).toByte)
-      if (off <= 2 && len + off > 2)
-        buf.put(((value >> 8) & 0xff).toByte)
-      if (off <= 3 && len + off > 3)
-        buf.put((value & 0xff).toByte)
-
-      if (len > 4 - off) 4 - off else len
-    }
-
-    def signalWritten() {}
   }
 
   object MessageEntry {
     val UTF8 = Charset.forName("UTF-8")
   }
 
-  case class MessageEntry(msg: String) extends LogEntry {
+  case class MessageEntry(msg: String) extends JournalEntry {
 
     import MessageEntry._
 
