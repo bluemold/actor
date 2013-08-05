@@ -10,7 +10,7 @@
     <url>http://bluemold.org/actor</url>
 
   <properties>
-    <scala.version>2.9.2</scala.version>
+    <scala.version>2.10.0</scala.version>
   </properties>
 
   <repositories>
@@ -53,7 +53,7 @@
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>3.8.1</version>
+      <version>4.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
