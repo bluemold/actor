@@ -151,7 +151,7 @@ final class UDPNode( localId: LocalNodeIdentity ) extends Node { selfNode =>
         socket.setReceiveBufferSize( receiveBufferSize )
         socket.setSendBufferSize( sendBufferSize )
         socket
-      } catch { case _ => getSocket( port + 1, address ) }
+      } catch { case _: Exception => getSocket( port + 1, address ) }
     } else null
   }
 

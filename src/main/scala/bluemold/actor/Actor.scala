@@ -1,9 +1,9 @@
 package bluemold.actor
 
+import scala.language.implicitConversions
 import org.bluemold.unsafe.Unsafe
 import annotation.tailrec
 import java.util.concurrent.Semaphore
-import java.lang.ThreadLocal
 
 object Actor {
   def actorOf( actor: Actor )( implicit strategy: ActorStrategy, parent: ActorRef ): ActorRef = {
@@ -22,7 +22,7 @@ object Actor {
   }
   def actorOf( actor: Actor, affinity: ActorRef )( implicit strategy: ActorStrategy, parent: ActorRef ): ActorRef = {
     val actorStrategy = {
-      val affinityStrategy = try { affinity.getCurrentStrategy() } catch { case _ => null } // swallow in case of not supported
+      val affinityStrategy = try { affinity.getCurrentStrategy() } catch { case _: Exception => null } // swallow in case of not supported
       if ( affinityStrategy != null ) affinityStrategy else strategy
     }
     actor match {

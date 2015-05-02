@@ -1,5 +1,6 @@
 package bluemold.persist
 
+import scala.language.implicitConversions
 import java.io.File
 import bluemold.io._
 import bluemold.concurrent.{AtomicReference, Future}

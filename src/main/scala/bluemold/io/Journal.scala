@@ -71,8 +71,8 @@ trait JournalEntrySetSignal {
 }
 
 case class JournalEntrySet( entry: JournalEntry, references: List[JournalEntry], signal: JournalEntrySetSignal, next: JournalEntrySet, lookup: HashMap[JournalEntry,JournalEntryLocation] ) extends JournalQueuable {
-  def this() = this(null,Nil,null,null,HashMap.empty())
-  def this(signal: JournalEntrySetSignal) = this(null,Nil,signal,null,HashMap.empty())
+  def this() = this(null,Nil,null,null,HashMap.empty)
+  def this(signal: JournalEntrySetSignal) = this(null,Nil,signal,null,HashMap.empty)
   def isEmpty = entry eq null
   def getCurrent: JournalEntry =
     if ( references.isEmpty ) entry
@@ -86,7 +86,7 @@ case class JournalEntrySetBuilder( entry: JournalEntry, references: List[Journal
   def this(signal: JournalEntrySetSignal) = this(null,Nil,signal,null)
   def addEntry( entry: JournalEntry ) = JournalEntrySetBuilder( entry, Nil, signal, this )
   def addEntry( entry: JournalEntry, references: List[JournalEntry] ) = JournalEntrySetBuilder( entry, Nil, signal, this )
-  def start: JournalEntrySet = start0( JournalEntrySet(null,Nil,signal,null,HashMap.empty()), this )
+  def start: JournalEntrySet = start0( JournalEntrySet(null,Nil,signal,null,HashMap.empty), this )
   @tailrec private def start0( next: JournalEntrySet, builder: JournalEntrySetBuilder ): JournalEntrySet =
     if ( builder.entry eq null ) next
     else start0( JournalEntrySet(builder.entry,builder.references,builder.signal,next,next.lookup), prior )

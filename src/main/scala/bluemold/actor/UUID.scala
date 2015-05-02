@@ -27,7 +27,7 @@ object UUID {
         try {
           parseNodeIdentity( id )
         } catch {
-          case _ => generateNodeIdentity( store )
+          case _: Exception => generateNodeIdentity( store )
         }
       }
       case None => generateNodeIdentity( store )
@@ -40,7 +40,7 @@ object UUID {
       try {
         new NodeIdentity( java.lang.Long.parseLong( idParts(0), 16 ), java.lang.Long.parseLong( idParts(1), 16 ) )
       } catch {
-        case e => throw new IllegalStateException(e) 
+        case e: Exception => throw new IllegalStateException(e)
       }
     } else throw new IllegalStateException("identity not formatted correctly")
   }

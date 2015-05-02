@@ -570,11 +570,11 @@ final class AbstractFuture extends FutureWithAddReplyChannel[Any] with ReplyChan
 
 final class ChildFuture[+T,U]( parent: FutureWithAddReplyChannel[U], g: (U) => T ) extends FutureWithAddReplyChannel[T] {
   def !(react: PartialFunction[T, Unit])(implicit sender: ActorRef) {
-    parent.!({ case msg: U => react( g( msg ) ) })
+    parent ! { case msg => react( g( msg ) ) }
   }
 
   def ?(react: PartialFunction[T, Unit])(implicit sender: ActorRef) {
-    parent.?({ case msg: U => react( g( msg ) ) })
+    parent ? { case msg => react( g( msg ) ) }
   }
 
   def replyWith()(implicit sender: ActorRef) {
@@ -600,7 +600,6 @@ class ReplyChannelModifier[T,S]( f: ( T ) => S, channel: ReplyChannel ) extends 
   def issueReply(msg: Any)(implicit sender: ActorRef) {
     msg match {
       case t: T => channel.issueReply( f( t ) )
-      case x => channel.issueReply( x )
     }
   }
 }

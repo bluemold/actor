@@ -3,14 +3,14 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.bluemold</groupId>
   <artifactId>actor</artifactId>
-  <version>0.1</version>
+  <version>0.1-SNAPSHOT</version>
   <inceptionYear>2011</inceptionYear>
 
     <name>actor</name>
     <url>http://bluemold.org/actor</url>
 
   <properties>
-    <scala.version>2.10.0</scala.version>
+    <scala.version>2.11.6</scala.version>
   </properties>
 
   <repositories>
@@ -38,12 +38,12 @@
       <dependency>
         <groupId>org.bluemold</groupId>
         <artifactId>concurrent</artifactId>
-        <version>0.1</version>
+        <version>0.1-SNAPSHOT</version>
       </dependency>
       <dependency>
         <groupId>org.bluemold</groupId>
         <artifactId>unsafe</artifactId>
-        <version>0.1</version>
+        <version>0.1-SNAPSHOT</version>
       </dependency>
     <dependency>
       <groupId>org.scala-lang</groupId>
